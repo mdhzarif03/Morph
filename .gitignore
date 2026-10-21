@@ -1,0 +1,20 @@
+node_modules/
+dist/
+release/
+coverage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+
+# Third-party binaries are never committed. See docs/DEPENDENCIES.md
+vendor/*
+!vendor/README.md
+!vendor/.gitkeep
+vendor/*
+!vendor/README.md
+!vendor/.gitkeep

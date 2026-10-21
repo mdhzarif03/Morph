@@ -1,0 +1,42 @@
+appId: io.morph.app
+productName: Morph
+copyright: Copyright (c) 2026 Morph contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+  - "!node_modules/**/{test,tests,__tests__,docs,example,examples}/**"
+asar: true
+# Native / binary packages must live outside the asar so they can be loaded and executed.
+asarUnpack:
+  - node_modules/sharp/**
+  - node_modules/@img/**
+  - node_modules/ffmpeg-static/**
+  - node_modules/@ffprobe-installer/**
+# Files read by the main process at runtime from process.resourcesPath.
+extraResources:
+  - from: resources
+    to: .
+    filter: ["tray*.png"]
+  - from: build/icon.png
+    to: icon.png
+  # Optional bundled tools (see vendor/README.md). Missing folders are simply skipped.
+  - from: vendor
+    to: vendor
+    filter: ["**/*", "!README.md", "!.gitkeep"]
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  shortcutName: Morph
+  # Launch at login is controlled inside the app (off by default); the installer never enables it.
+publish: null

@@ -1,0 +1,30 @@
+/** All IPC channel names in one place so main, preload and tests agree. */
+export const IPC = {
+  // renderer -> main (invoke)
+  pickFiles: 'morph:files:pick',
+  inspectPaths: 'morph:files:inspect',
+  startConversion: 'morph:jobs:start',
+  cancelJob: 'morph:jobs:cancel',
+  cancelAll: 'morph:jobs:cancel-all',
+  listJobs: 'morph:jobs:list',
+  clearFinished: 'morph:jobs:clear-finished',
+  openOutput: 'morph:output:open',
+  showOutput: 'morph:output:show',
+  getSettings: 'morph:settings:get',
+  updateSettings: 'morph:settings:update',
+  setShortcut: 'morph:settings:set-shortcut',
+  pickOutputDirectory: 'morph:settings:pick-output-dir',
+  pickToolPath: 'morph:settings:pick-tool-path',
+  clearToolPath: 'morph:settings:clear-tool-path',
+  getShortcutStatus: 'morph:shortcut:status',
+  getDiagnostics: 'morph:diagnostics:get',
+  getAppInfo: 'morph:app:info',
+  hideWindow: 'morph:window:hide',
+  setContentHeight: 'morph:window:set-height',
+  openLogs: 'morph:app:open-logs',
+  // main -> renderer
+  jobUpdated: 'morph:event:job-updated',
+  windowShown: 'morph:event:window-shown',
+  navigate: 'morph:event:navigate',
+  shortcutStatusChanged: 'morph:event:shortcut-status',
+} as const;

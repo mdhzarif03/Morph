@@ -1,0 +1,70 @@
+{
+  "name": "morph",
+  "productName": "Morph",
+  "version": "0.1.0",
+  "description": "Files, transformed. A local-first universal file converter with a global shortcut for Windows.",
+  "author": "Morph contributors",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "electron .",
+    "build": "npm run build:renderer && npm run build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "node scripts/build-electron.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npm run build && playwright test",
+    "icons": "node scripts/generate-icons.mjs",
+    "check:vendor": "node scripts/check-vendor.mjs",
+    "licenses": "node scripts/list-licenses.mjs",
+    "package:dir": "npm run build && electron-builder --win --x64 --dir",
+    "package": "npm run build && node scripts/check-vendor.mjs && electron-builder --win nsis --x64 --publish never",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "sharp": "^0.35.5"
+  },
+  "optionalDependencies": {
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@playwright/test": "^1.64.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/yauzl": "^2.10.3",
+    "@types/yazl": "^3.3.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "jsdom": "^30.1.3",
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1",
+    "zod": "^4.6.7"
+  }
+}
