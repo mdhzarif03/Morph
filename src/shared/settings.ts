@@ -29,9 +29,6 @@ export const SettingsSchema = z.strictObject({
     .strictObject({
       ffmpeg: toolPath,
       ffprobe: toolPath,
-      soffice: toolPath,
-      pdftoppm: toolPath,
-      pdfinfo: toolPath,
     })
     .default({}),
   welcomeShown: z.boolean().default(false),

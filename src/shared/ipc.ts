@@ -33,7 +33,7 @@ export const MAX_FILES_PER_REQUEST = 200;
 
 const id = z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/);
 const absolutePath = z.string().min(1).max(4096).refine((p) => !p.includes('\0'), 'Invalid path');
-const toolId = z.enum(['ffmpeg', 'ffprobe', 'soffice', 'pdftoppm', 'pdfinfo']);
+const toolId = z.enum(['ffmpeg', 'ffprobe']);
 
 // Option values are validated against the registry's specs in the main process; here we only
 // bound their shape so a hostile renderer cannot send arbitrarily large or nested data.

@@ -1,6 +1,6 @@
 import type { ToolId, ToolStatus, ToolchainSnapshot } from '../../src/shared/types';
 
-const LABELS: Record<ToolId, string> = { ffmpeg: 'FFmpeg', ffprobe: 'FFprobe', soffice: 'LibreOffice', pdftoppm: 'Poppler (pdftoppm)', pdfinfo: 'Poppler (pdfinfo)' };
+const LABELS: Record<ToolId, string> = { ffmpeg: 'FFmpeg', ffprobe: 'FFprobe' };
 
 export const ALL_ENCODERS = ['aac', 'ac3', 'flac', 'libmp3lame', 'libopus', 'libvorbis', 'libvpx-vp9', 'libx264', 'libx265', 'libsvtav1', 'mpeg4', 'pcm_s16le', 'pcm_s24le'];
 
@@ -21,5 +21,5 @@ export function fakeToolchain(present: ToolId[] = [], encoders: string[] = ALL_E
   return { tools, checkedAt: 0 };
 }
 
-export const EVERYTHING = fakeToolchain(['ffmpeg', 'ffprobe', 'soffice', 'pdftoppm', 'pdfinfo']);
+export const EVERYTHING = fakeToolchain(['ffmpeg', 'ffprobe']);
 export const NOTHING = fakeToolchain([]);

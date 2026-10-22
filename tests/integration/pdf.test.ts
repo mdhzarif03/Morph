@@ -3,12 +3,10 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { buildPdf, writeFile } from '../helpers/fixtures';
-import { createHarness, hasTool, makeTempDir } from '../helpers/env';
+import { createHarness, makeTempDir } from '../helpers/env';
 import { readZip } from '../helpers/zipread';
 
-const popplerAvailable = (await hasTool('pdftoppm')) && (await hasTool('pdfinfo'));
-
-describe.skipIf(!popplerAvailable)('PDF to images (Poppler)', () => {
+describe('PDF to images (built-in PDFium)', () => {
   it('renders a multi-page PDF to numbered JPGs inside a ZIP, in page order', async () => {
     const dir = await makeTempDir('pdf');
     const source = await writeFile(path.join(dir, 'report.pdf'), buildPdf(12));

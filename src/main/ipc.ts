@@ -31,9 +31,6 @@ export interface IpcContext {
 const EXPECTED_EXECUTABLE: Record<ToolId, string> = {
   ffmpeg: 'ffmpeg',
   ffprobe: 'ffprobe',
-  soffice: 'soffice',
-  pdftoppm: 'pdftoppm',
-  pdfinfo: 'pdfinfo',
 };
 
 /** Message shown to the user for failures that are not already MorphErrors. */

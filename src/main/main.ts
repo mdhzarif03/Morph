@@ -7,7 +7,8 @@ import { createFileLogger } from './file-logger';
 import { registerIpc } from './ipc';
 import { SettingsStore } from './settings-store';
 import { ShortcutManager } from './shortcut-manager';
-import { ToolchainService, bundledVendorRoots, unpackedPath } from './toolchain-service';
+import { createElectronPrinter } from './printer';
+import { ToolchainService, bundledVendorRoots } from './toolchain-service';
 import { WindowManager } from './window';
 import { IPC } from '../shared/ipc';
 
@@ -46,9 +47,10 @@ async function start(): Promise<void> {
   log.info('toolchain', Object.fromEntries(Object.entries(toolchain.current().tools).map(([id, t]) => [id, t.found ? (t.source ?? 'found') : 'missing'])));
 
   const registry = new FileRegistry();
-  const workerFile = unpackedPath(path.join(__dirname, 'worker.cjs'));
+  // worker.cjs stays inside app.asar (Electron loads worker threads from it); only native/binary packages are unpacked.
+  const workerFile = path.join(__dirname, 'worker.cjs');
   const jobs = new JobManager({
-    executor: createWorkerExecutor(workerFile),
+    executor: createWorkerExecutor(workerFile, createElectronPrinter(log)),
     registry,
     getToolchain: () => toolchain.current(),
     getOutputSettings: () => {

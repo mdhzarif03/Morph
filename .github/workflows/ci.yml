@@ -13,9 +13,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install system tools used by integration tests
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils libreoffice-writer xvfb
+      - name: Install a virtual display for the Electron tests
+        run: sudo apt-get update && sudo apt-get install -y xvfb
       - run: npm ci
+      - name: Browser used by document tests (the app itself uses Electron's built-in Chromium)
+        run: npx playwright install --with-deps chromium
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

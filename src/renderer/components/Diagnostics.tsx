@@ -69,10 +69,10 @@ export function Diagnostics() {
   };
 
   if (!snapshot) return <p className="text-xs text-muted">Checking tools…</p>;
-  const order: ToolId[] = ['ffmpeg', 'ffprobe', 'pdftoppm', 'pdfinfo', 'soffice'];
+  const order: ToolId[] = ['ffmpeg', 'ffprobe'];
   return (
     <div className="space-y-2.5">
-      <p className="text-xs text-muted">Images work without any extra tools. Everything else needs the helper programs below.</p>
+      <p className="text-xs text-muted">Images, documents and PDFs are converted by Morph itself. Audio and video use the FFmpeg engine that ships with Morph.</p>
       <ul className="space-y-2">
         {order.map((id) => (
           <ToolRow key={id} tool={snapshot.tools[id]} onPick={() => void run(() => api.pickToolPath(id))} onClear={() => void run(() => api.clearToolPath(id))} />

@@ -9,7 +9,6 @@ import { AUDIO_FORMATS, VIDEO_FORMATS, inspectMedia } from './engines/media';
 import { inspectPdf } from './engines/pdf';
 import { baseNameWithoutExtension, statRegularFile } from './fsutil';
 import { describeTargets } from './registry';
-import { toolPath } from './tools';
 
 /** A file the user handed to Morph, remembered by an opaque id so conversions never re-accept raw paths. */
 export interface RegisteredFile {
@@ -55,7 +54,7 @@ export interface InspectEnv {
 
 async function detailsFor(realPath: string, format: FormatId, env: InspectEnv): Promise<{ details: FileDetails; preview?: string }> {
   if (IMAGE_FORMATS.includes(format)) return inspectImage(realPath, format, true);
-  if (format === 'pdf') return { details: await inspectPdf(toolPath(env.toolchain, 'pdfinfo'), realPath) };
+  if (format === 'pdf') return { details: await inspectPdf(realPath) };
   if (AUDIO_FORMATS.includes(format) || VIDEO_FORMATS.includes(format)) return { details: await inspectMedia(env.toolchain, realPath) };
   return { details: {} };
 }

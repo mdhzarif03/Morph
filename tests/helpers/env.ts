@@ -10,6 +10,7 @@ import { FileRegistry, inspectFile } from '../../src/core/inspect';
 import { JobManager } from '../../src/core/jobs';
 import type { OutputSettings } from '../../src/core/output';
 import { probeToolchain } from '../../src/core/tools';
+import './printer';
 
 const require = createRequire(import.meta.url);
 

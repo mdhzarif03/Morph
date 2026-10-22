@@ -30,7 +30,10 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "sharp": "^0.35.5"
+    "@hyzyla/pdfium": "^3.0.0",
+    "fast-xml-parser": "^5.11.2",
+    "sharp": "^0.35.5",
+    "word-extractor": "^1.0.4"
   },
   "optionalDependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",

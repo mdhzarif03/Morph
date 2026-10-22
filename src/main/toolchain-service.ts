@@ -25,7 +25,7 @@ function npmBinary(moduleName: string): () => string | undefined {
 }
 
 export interface ToolchainServiceOptions {
-  /** Folders holding bundled tool directories (`ffmpeg/`, `poppler/`, `libreoffice/`). */
+  /** Folders holding bundled tool directories (`ffmpeg/`). */
   bundledRoots: string[];
   getOverrides(): ToolPaths;
 }

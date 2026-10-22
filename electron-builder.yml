@@ -13,6 +13,7 @@ asar: true
 # Native / binary packages must live outside the asar so they can be loaded and executed.
 asarUnpack:
   - node_modules/sharp/**
+  - node_modules/@hyzyla/pdfium/**
   - node_modules/@img/**
   - node_modules/ffmpeg-static/**
   - node_modules/@ffprobe-installer/**
@@ -23,7 +24,7 @@ extraResources:
     filter: ["tray*.png"]
   - from: build/icon.png
     to: icon.png
-  # Optional bundled tools (see vendor/README.md). Missing folders are simply skipped.
+  # Optional: an FFmpeg build you place yourself overrides the npm one (see vendor/README.md).
   - from: vendor
     to: vendor
     filter: ["**/*", "!README.md", "!.gitkeep"]

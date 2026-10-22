@@ -3,7 +3,7 @@
 **Files, transformed.** A local-first universal file converter for Windows 10/11 (x64).
 Press one shortcut, drop a file, pick a format, done. Nothing leaves your computer.
 
-> Status: early release (0.1.0). Developed and tested on Linux; the Windows installer has **not** been built or run yet. See [Known limitations](#known-limitations).
+> Status: early release (0.1.0). Developed and tested on Linux; the app has been run on Windows 11 with `npm run dev`. The Windows installer is cross-built and has not been tested on a clean Windows machine. See [Known limitations](#known-limitations).
 
 <!-- Screenshots: add docs/screenshots/*.png and reference them here before publishing. -->
 
@@ -21,12 +21,12 @@ Press one shortcut, drop a file, pick a format, done. Nothing leaves your comput
 | Category | From | To | Needs |
 | --- | --- | --- | --- |
 | Images | PNG, JPG, WebP, AVIF, BMP, TIFF, GIF, ICO | the same set | built in (Sharp) |
-| Documents | DOCX, DOC, ODT, TXT | PDF, PNG, JPG, and DOCX/ODT/DOC where sensible | LibreOffice (+ Poppler for page images) |
-| PDF | PDF | PNG, JPG per page (ZIP when more than one page) | Poppler |
-| Audio | MP3, WAV, FLAC, AAC, OGG, M4A | the same set | FFmpeg |
-| Video | MP4, MKV, MOV, WebM, AVI | the same containers, or audio only | FFmpeg |
+| Documents | DOCX, DOC (text only), ODT, TXT | PDF, PNG, JPG | built in (laid out by Morph, rendered by PDFium) |
+| PDF | PDF | PNG, JPG per page (ZIP when more than one page) | built in (PDFium) |
+| Audio | MP3, WAV, FLAC, AAC, OGG, M4A | the same set | FFmpeg (ships inside the installer) |
+| Video | MP4, MKV, MOV, WebM, AVI | the same containers, or audio only | FFmpeg (ships inside the installer) |
 
-Notes: PDF to Word is deliberately not offered. Video uses stream copy when the source already fits the target container, otherwise it re-encodes. Multi-page results are saved as `name_page_001.jpg` inside `name.zip`.
+Morph is **standalone**: nothing else (Office, LibreOffice, Poppler, FFmpeg) has to be installed on the computer. Notes: PDF to Word is not offered, and conversions between word-processor formats (for example DOCX to ODT) are not offered because they cannot be done faithfully without a full office suite. Video uses stream copy when the source already fits the target container, otherwise it re-encodes. Multi-page results are saved as `name_page_001.jpg` inside `name.zip`.
 
 ## Run from source
 
@@ -38,7 +38,7 @@ npm run dev        # development with hot reload
 npm run build && npm start   # production build
 ```
 
-External tools (optional, per conversion type): FFmpeg is pulled in through npm on supported platforms; install LibreOffice and Poppler yourself or place them in `vendor/` (see [vendor/README.md](vendor/README.md) and [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)). Settings → Tools shows what was found.
+No other software is needed. Documents and PDFs are handled by libraries inside the app; FFmpeg comes from the `ffmpeg-static` / `@ffprobe-installer/ffprobe` npm packages (their binaries are downloaded by npm during `npm install`).
 
 ## Build the Windows installer
 
@@ -46,19 +46,19 @@ Run on Windows 10/11 x64:
 
 ```bash
 npm install
-npm run check:vendor   # shows which optional tools will be bundled
+npm run check:vendor   # verifies FFmpeg/FFprobe are present for the installer
 npm run package        # NSIS installer in release/
 npm run package:dir    # unpacked app for quick inspection
 ```
 
-Review [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) before distributing an installer: bundled FFmpeg/LibreOffice/Poppler carry their own licences (GPL/LGPL/MPL) that you must comply with. The installer is unsigned unless you add code signing.
+Review [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) before distributing an installer: the bundled FFmpeg build carries its own licence (GPL for the npm-supplied binaries) that you must comply with. The installer is unsigned unless you add code signing.
 
 ## Development
 
 ```bash
 npm run lint
 npm run typecheck
-npm test            # unit + integration (real tools are used when present, otherwise those tests skip)
+npm test            # unit + integration (document tests need a Chromium for Playwright; FFmpeg tests need the npm FFmpeg)
 npm run test:e2e    # Playwright + Electron (needs a display; use xvfb-run on Linux)
 npm run verify      # lint + typecheck + test + build
 ```
@@ -72,9 +72,8 @@ Context isolation on, Node integration off, strict CSP, a minimal typed preload 
 ## Known limitations
 
 - The Windows installer, Windows shortcut registration, tray and launch-at-login behaviour have not been tested on a real Windows machine.
-- Without LibreOffice or Poppler installed (or bundled), document and PDF conversions are disabled and the UI says why.
+- Document layout is done by Morph, not by Word: DOCX and ODT fonts, sizes, colours, alignment, spacing, lists, tables, pictures and page size/margins are reproduced, but headers, footers, footnotes, columns, text boxes and tracked changes are not, fonts not installed on the machine are substituted, and page breaks can differ slightly. Legacy `.doc` files are converted as plain text only. Save as DOCX for the best result.
 - Encrypted PDFs and password-protected documents are rejected, not unlocked.
-- Visual fidelity of DOCX/DOC/ODT output is whatever LibreOffice produces.
 - No code signing; Windows SmartScreen will warn on unsigned builds.
 
 ## Contributing

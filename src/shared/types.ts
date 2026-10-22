@@ -2,7 +2,7 @@ import type { Category, FormatId } from './formats';
 import type { ErrorInfo } from './errors';
 import type { OptionSpec, OptionValues } from './options';
 
-export type ToolId = 'ffmpeg' | 'ffprobe' | 'soffice' | 'pdftoppm' | 'pdfinfo';
+export type ToolId = 'ffmpeg' | 'ffprobe';
 
 export type ToolSource = 'settings' | 'bundled' | 'npm' | 'system-path' | 'known-location';
 

@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { buildPdf, buildTransparentPng } from '../helpers/fixtures';
+import { buildPdf, buildTransparentPng, buildWav, writeRichDocx } from '../helpers/fixtures';
+import { pdfPageTexts } from '../helpers/pdftext';
 import { readZip } from '../helpers/zipread';
 
 let app: ElectronApplication;
@@ -37,9 +38,13 @@ test.beforeAll(async () => {
   work = mkdtempSync(path.join(os.tmpdir(), 'morph-e2e-work-'));
   const userData = mkdtempSync(path.join(os.tmpdir(), 'morph-e2e-ud-'));
   mkdirSync(shots, { recursive: true });
+  // MORPH_E2E_EXECUTABLE runs the tests against a packaged build (release/<platform>-unpacked/morph) instead of the sources.
+  const packaged = process.env.MORPH_E2E_EXECUTABLE;
   app = await electron.launch({
-    args: ['.', '--no-sandbox', '--disable-gpu'],
-    env: { ...process.env, MORPH_USER_DATA_DIR: userData, MORPH_SHOW_ON_START: '1' },
+    ...(packaged ? { executablePath: packaged } : {}),
+    args: [...(packaged ? [] : ['.']), '--no-sandbox', '--disable-gpu'],
+    // PATH is emptied on purpose: Morph must work with nothing else installed on the computer.
+    env: { ...process.env, PATH: '/nonexistent', MORPH_USER_DATA_DIR: userData, MORPH_SHOW_ON_START: '1' },
   });
   page = await app.firstWindow();
   await page.waitForSelector('text=Drop a file here');
@@ -178,6 +183,53 @@ test('browse button flow converts a multi-page PDF to a ZIP of numbered JPG page
   expect(zip.magic.every((m) => m.startsWith('ffd8ff'))).toBe(true);
 });
 
+test('converts a DOCX to PDF with no other software installed (built-in layout engine)', async () => {
+  const dir = mkdtempSync(path.join(work, 'docx-'));
+  const source = path.join(dir, 'report.docx');
+  await writeRichDocx(source);
+  await dropFiles([source]);
+  await expect(page.getByText('report.docx').first()).toBeVisible();
+  const offered = await page.getByRole('radio').allTextContents();
+  expect(offered.sort()).toEqual(['JPG', 'PDF', 'PNG']);
+  for (const radio of await page.getByRole('radio').all()) await expect(radio).toBeEnabled();
+  await page.getByRole('radio', { name: 'PDF' }).click();
+  await settle();
+  await page.screenshot({ path: path.join(shots, '09-docx-options.png') });
+  await page.getByRole('button', { name: /^Convert/ }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect(readdirSync(dir).sort()).toEqual(['report.docx', 'report.pdf']);
+  // The faithful layout can position glyphs one by one, so compare without whitespace.
+  const text = (await pdfPageTexts(path.join(dir, 'report.pdf'))).join('').replace(/[\s\u00b7]+/g, '');
+  expect(text).toContain('QuarterlyReport');
+  expect(text).toContain('Revenuewasstrongthisquarter.');
+  expect(text).toContain('North');
+});
+
+test('converts a TXT to JPG pages (layout engine, then built-in PDF renderer)', async () => {
+  const dir = mkdtempSync(path.join(work, 'txt-'));
+  const source = path.join(dir, 'notes.txt');
+  writeFileSync(source, 'First line\nSecond line — with a dash\n');
+  await dropFiles([source]);
+  await page.getByRole('radio', { name: 'JPG' }).click();
+  await page.getByRole('button', { name: /^Convert/ }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect(readdirSync(dir).sort()).toEqual(['notes.jpg', 'notes.txt']);
+  expect((await sharp(path.join(dir, 'notes.jpg')).metadata()).format).toBe('jpeg');
+});
+
+test('converts WAV to MP3 with the FFmpeg that ships with the app', async () => {
+  const dir = mkdtempSync(path.join(work, 'wav-'));
+  const source = path.join(dir, 'tone.wav');
+  writeFileSync(source, buildWav(1));
+  await dropFiles([source]);
+  await page.getByRole('radio', { name: 'MP3' }).click();
+  await page.getByRole('button', { name: /^Convert/ }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect(readdirSync(dir).sort()).toEqual(['tone.mp3', 'tone.wav']);
+  const head = readFileSync(path.join(dir, 'tone.mp3')).subarray(0, 3).toString('latin1');
+  expect(['ID3', '\xff\xfb\x90'].some((m) => head.startsWith(m.slice(0, 2)))).toBe(true);
+});
+
 test('shows a clear error for an unsupported or misnamed file', async () => {
   const dir = mkdtempSync(path.join(work, 'bad-'));
   const fake = path.join(dir, 'photo.png');
@@ -216,7 +268,8 @@ test('changes the shortcut to a valid combination and re-registers it', async ()
 test('diagnostics lists external tools', async () => {
   await openSettings();
   await expect(page.getByText('FFmpeg', { exact: false }).first()).toBeVisible();
-  await expect(page.getByText('LibreOffice').first()).toBeVisible();
+  await expect(page.getByText('FFprobe').first()).toBeVisible();
+  await expect(page.getByText(/LibreOffice|Poppler/)).toHaveCount(0);
   await settle();
   await page.screenshot({ path: path.join(shots, '08-diagnostics.png'), fullPage: true });
   await page.keyboard.press('Escape'); // Escape leaves Settings first

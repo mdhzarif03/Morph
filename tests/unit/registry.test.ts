@@ -33,8 +33,7 @@ describe('conversion registry', () => {
     for (const source of ['docx', 'doc', 'odt', 'txt'] as const) {
       expect(targetsFor(source)).toEqual(expect.arrayContaining(['pdf', 'png', 'jpg']));
     }
-    expect(targetsFor('docx')).toContain('odt');
-    expect(targetsFor('doc')).toContain('docx');
+    expect(targetsFor('docx').sort()).toEqual(['jpg', 'pdf', 'png']);
   });
 
   it('covers every image format as both source and target', () => {
@@ -42,20 +41,20 @@ describe('conversion registry', () => {
     for (const source of images) expect(targetsFor(source).sort()).toEqual([...images].sort());
   });
 
-  it('marks tool-dependent targets unavailable with an install hint when tools are missing', () => {
+  it('document and PDF conversions need no external program', () => {
     const none = describeTargets('docx', env(NOTHING));
-    const pdf = none.find((t) => t.format === 'pdf');
-    expect(pdf?.available).toBe(false);
-    expect(pdf?.unavailableReason).toMatch(/LibreOffice is not installed/);
-
-    const imagesStillWork = describeTargets('png', env(NOTHING));
-    expect(imagesStillWork.every((t) => t.available)).toBe(true);
+    for (const format of ['pdf', 'png', 'jpg']) expect(none.find((t) => t.format === format)?.available, format).toBe(true);
+    expect(describeTargets('pdf', env(NOTHING)).every((t) => t.available)).toBe(true);
+    expect(describeTargets('png', env(NOTHING)).every((t) => t.available)).toBe(true);
   });
 
-  it('requires every tool of a path: page images need both LibreOffice and Poppler', () => {
-    const onlyOffice = describeTargets('docx', env(fakeToolchain(['soffice'])));
-    expect(onlyOffice.find((t) => t.format === 'pdf')?.available).toBe(true);
-    expect(onlyOffice.find((t) => t.format === 'png')?.available).toBe(false);
+  it('marks audio and video targets unavailable with a reason when FFmpeg is missing', () => {
+    const wav = describeTargets('wav', env(NOTHING));
+    expect(wav.length).toBeGreaterThan(0);
+    for (const t of wav) {
+      expect(t.available).toBe(false);
+      expect(t.unavailableReason).toMatch(/FFmpeg/);
+    }
   });
 
   it('disables audio/video targets whose encoder is missing from this FFmpeg build', () => {
@@ -76,12 +75,7 @@ describe('conversion registry', () => {
 
   it('resolveConversion rejects unsupported pairs and missing tools with clear codes', () => {
     expect(() => resolveConversion('png', 'mp4', {}, env())).toThrowError(/not supported/);
-    expect(() => resolveConversion('docx', 'pdf', {}, env(NOTHING))).toThrowError(/LibreOffice is not installed/);
-    try {
-      resolveConversion('docx', 'pdf', {}, env(NOTHING));
-    } catch (e) {
-      expect((e as { code: string }).code).toBe('TOOL_MISSING');
-    }
+    expect(() => resolveConversion('wav', 'mp3', {}, env(NOTHING))).toThrowError(expect.objectContaining({ code: 'TOOL_MISSING' }));
     expect(() => resolveConversion('png', 'jpg', { quality: 500 }, env())).toThrowError(/between 1 and 100/);
     expect(resolveConversion('png', 'jpg', { quality: 70 }, env()).options.quality).toBe(70);
   });

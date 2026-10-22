@@ -21,7 +21,7 @@ export interface RunResult {
 
 const isWindows = process.platform === 'win32';
 
-/** Kills a process and all of its descendants. LibreOffice, for example, re-spawns soffice.bin. */
+/** Kills a process and all of its descendants. FFmpeg and other tools may spawn helpers of their own. */
 export function killTree(child: ChildProcess): void {
   const pid = child.pid;
   if (pid === undefined) return;

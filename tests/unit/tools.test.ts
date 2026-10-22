@@ -38,11 +38,11 @@ describe('tool locator', () => {
     expect(await locateTool('ffmpeg', { overrides: { ffmpeg: root }, env: { PATH: '' }, platform: 'linux' })).toBeNull();
   });
 
-  it('finds Poppler nested several folders deep in a bundled directory', async () => {
+  it('finds FFmpeg in a bundled vendor folder (also under bin/)', async () => {
     const root = await makeTempDir('tools');
-    const deep = await fakeExe(path.join(root, 'poppler', 'poppler-24.08.0', 'Library', 'bin'), 'pdftoppm');
-    const found = await locateTool('pdftoppm', { bundledRoots: [root], env: { PATH: '' }, platform: 'linux' });
-    expect(found?.path).toBe(deep);
+    const deep = await fakeExe(path.join(root, 'ffmpeg', 'bin'), 'ffprobe');
+    const found = await locateTool('ffprobe', { bundledRoots: [root], env: { PATH: '' }, platform: 'linux' });
+    expect(found).toEqual({ path: deep, source: 'bundled' });
   });
 
   it('returns null when nothing is installed', async () => {
@@ -50,14 +50,12 @@ describe('tool locator', () => {
   });
 
   it('requireToolPath reports TOOL_MISSING with an install hint', () => {
-    expect(() => requireToolPath(NOTHING, 'soffice', 'document conversion')).toThrowError(expect.objectContaining({ code: 'TOOL_MISSING' }));
+    expect(() => requireToolPath(NOTHING, 'ffmpeg', 'audio conversion')).toThrowError(expect.objectContaining({ code: 'TOOL_MISSING' }));
     expect(requireToolPath(EVERYTHING, 'ffmpeg', 'x')).toBe('/fake/ffmpeg');
   });
 
   it('parses version strings', () => {
     expect(parseVersion('ffmpeg', 'ffmpeg version 7.0.2-static https://johnvansickle.com\nbuilt with gcc')).toBe('7.0.2-static');
-    expect(parseVersion('soffice', 'LibreOffice 24.2.7.2 420(Build:2)')).toBe('24.2.7.2');
-    expect(parseVersion('pdftoppm', 'pdftoppm version 24.08.0\nCopyright')).toBe('24.08.0');
     expect(parseVersion('ffmpeg', '')).toBeUndefined();
   });
 });

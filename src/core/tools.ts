@@ -17,7 +17,7 @@ import type { ToolId, ToolPaths, ToolSource, ToolStatus, ToolchainSnapshot } fro
 
 export interface LocatorOptions {
   overrides?: ToolPaths;
-  /** Directories that contain bundled tool folders (`ffmpeg/`, `poppler/`, `libreoffice/`). */
+  /** Directories that contain bundled tool folders (`ffmpeg/`). */
   bundledRoots?: string[];
   /** Hooks for npm-supplied binaries. Return undefined when not installed. */
   npmResolvers?: Partial<Record<ToolId, () => string | undefined>>;
@@ -40,31 +40,9 @@ const TOOL_META: Record<ToolId, { label: string; neededFor: string; installHint:
     installHint: (p) =>
       p === 'win32' ? 'Installed with FFmpeg (“winget install Gyan.FFmpeg”), or choose ffprobe.exe manually below.' : 'Installed together with FFmpeg.',
   },
-  soffice: {
-    label: 'LibreOffice',
-    neededFor: 'DOCX, DOC, ODT and TXT conversion',
-    installHint: (p) =>
-      p === 'win32'
-        ? 'Install LibreOffice from libreoffice.org (or “winget install TheDocumentFoundation.LibreOffice”), or choose soffice.exe manually below.'
-        : 'Install LibreOffice with your package manager, or choose the soffice executable manually below.',
-  },
-  pdftoppm: {
-    label: 'Poppler (pdftoppm)',
-    neededFor: 'Rendering PDF and document pages to images',
-    installHint: (p) =>
-      p === 'win32'
-        ? 'Download Poppler for Windows (see docs/DEPENDENCIES.md), extract it, then choose pdftoppm.exe manually below.'
-        : 'Install poppler-utils with your package manager, or choose the executable manually below.',
-  },
-  pdfinfo: {
-    label: 'Poppler (pdfinfo)',
-    neededFor: 'Reading PDF page counts and sizes (installed together with pdftoppm)',
-    installHint: (p) =>
-      p === 'win32' ? 'Included in the Poppler download; choose pdfinfo.exe manually below.' : 'Included in poppler-utils.',
-  },
 };
 
-export const ALL_TOOLS: readonly ToolId[] = ['ffmpeg', 'ffprobe', 'soffice', 'pdftoppm', 'pdfinfo'];
+export const ALL_TOOLS: readonly ToolId[] = ['ffmpeg', 'ffprobe'];
 
 function exeName(id: ToolId, platform: NodeJS.Platform): string {
   return platform === 'win32' ? `${id}.exe` : id;
@@ -91,21 +69,8 @@ async function findInPath(id: ToolId, platform: NodeJS.Platform, env: NodeJS.Pro
   return null;
 }
 
-function knownLocations(id: ToolId, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
-  const out: string[] = [];
-  if (id === 'soffice') {
-    if (platform === 'win32') {
-      for (const base of [env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramW6432, env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs')]) {
-        if (base) out.push(path.join(base, 'LibreOffice', 'program', 'soffice.exe'));
-      }
-    } else if (platform === 'darwin') {
-      out.push('/Applications/LibreOffice.app/Contents/MacOS/soffice');
-    } else {
-      out.push('/usr/bin/soffice', '/usr/lib/libreoffice/program/soffice', '/opt/libreoffice/program/soffice');
-    }
-  }
-  if (platform === 'darwin') out.push(`/opt/homebrew/bin/${id}`, `/usr/local/bin/${id}`);
-  return out;
+function knownLocations(id: ToolId, platform: NodeJS.Platform): string[] {
+  return platform === 'darwin' ? [`/opt/homebrew/bin/${id}`, `/usr/local/bin/${id}`] : [];
 }
 
 async function findBundled(id: ToolId, roots: string[], platform: NodeJS.Platform): Promise<string | null> {
@@ -113,34 +78,7 @@ async function findBundled(id: ToolId, roots: string[], platform: NodeJS.Platfor
   for (const root of roots) {
     const direct: string[] = [];
     if (id === 'ffmpeg' || id === 'ffprobe') direct.push(path.join(root, 'ffmpeg', exe), path.join(root, 'ffmpeg', 'bin', exe));
-    if (id === 'soffice') direct.push(path.join(root, 'libreoffice', 'program', exe));
     for (const candidate of direct) if (await isExecutableFile(candidate, platform)) return candidate;
-    if (id === 'pdftoppm' || id === 'pdfinfo') {
-      const found = await searchDir(path.join(root, 'poppler'), exe, 5);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-/** Bounded breadth-first search for a file name. Poppler's Windows zip nests binaries a few levels deep. */
-async function searchDir(root: string, fileName: string, maxDepth: number): Promise<string | null> {
-  let level = [root];
-  for (let depth = 0; depth <= maxDepth && level.length > 0; depth += 1) {
-    const next: string[] = [];
-    for (const dir of level) {
-      let entries;
-      try {
-        entries = await fs.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (entry.isFile() && entry.name.toLowerCase() === fileName.toLowerCase()) return path.join(dir, entry.name);
-        if (entry.isDirectory()) next.push(path.join(dir, entry.name));
-      }
-    }
-    level = next;
   }
   return null;
 }
@@ -163,7 +101,7 @@ export async function locateTool(id: ToolId, options: LocatorOptions = {}): Prom
   const npmPath = options.npmResolvers?.[id]?.();
   if (npmPath && (await isExecutableFile(npmPath, platform))) return { path: npmPath, source: 'npm' };
 
-  for (const candidate of knownLocations(id, platform, env)) {
+  for (const candidate of knownLocations(id, platform)) {
     if (await isExecutableFile(candidate, platform)) return { path: candidate, source: 'known-location' };
   }
 
@@ -194,7 +132,7 @@ export function parseVersion(id: ToolId, output: string): string | undefined {
 }
 
 async function readVersion(id: ToolId, toolPath: string): Promise<string | undefined> {
-  const args = id === 'ffmpeg' || id === 'ffprobe' ? ['-version'] : id === 'soffice' ? ['--version'] : ['-v'];
+  const args = ['-version'];
   try {
     const result = await runProcess(toolPath, args, { timeoutMs: 20_000 });
     const text = `${result.stdout}\n${result.stderr}`;

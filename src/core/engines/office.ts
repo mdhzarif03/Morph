@@ -1,125 +1,89 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { MorphError } from '../../shared/errors';
-import type { FormatId } from '../../shared/formats';
-import { runProcess, tailLines } from '../proc';
-import { requireToolPath } from '../tools';
+import { optString, type OptionSpec } from '../../shared/options';
+import { getHtmlPrinter } from '../print';
+import { docxToHtml } from './docs/docx';
+import { wrapHtml, type PageSize, type PageSpec } from './docs/html';
+import { legacyDocToHtml } from './docs/legacy-doc';
+import { odtToHtml } from './docs/odt';
+import { txtToHtml } from './docs/txt';
 import { renderPdfToImages } from './pdf';
 import type { EngineContext, EngineResult } from './types';
 
-const CONVERT_TIMEOUT_MS = 10 * 60_000;
-const MAX_TEXT_BYTES = 100 * 1024 * 1024;
+export const documentPageOptionSpecs: OptionSpec[] = [
+  {
+    key: 'pageSize',
+    type: 'select',
+    label: 'Page size',
+    default: 'auto',
+    choices: [
+      { value: 'auto', label: 'As in the document', description: 'DOCX keeps its own size; other files use A4' },
+      { value: 'A4', label: 'A4' },
+      { value: 'Letter', label: 'US Letter' },
+    ],
+  },
+];
 
-/** LibreOffice filter name for each target we ask it to write. */
-const LO_TARGET: Partial<Record<FormatId, { filter: string; ext: string }>> = {
-  pdf: { filter: 'pdf:writer_pdf_Export', ext: 'pdf' },
-  docx: { filter: 'docx:MS Word 2007 XML', ext: 'docx' },
-  odt: { filter: 'odt:writer8', ext: 'odt' },
-};
-
-/**
- * Prepares the input LibreOffice will read. We always hand it a private copy with a neutral name:
- * that keeps odd characters out of its command line and guarantees it never touches the original.
- * Plain text is normalised to UTF-8 (with BOM) so LibreOffice reads the right encoding.
- */
-async function stageInput(ctx: EngineContext, inputDir: string): Promise<string> {
-  const ext = ctx.sourceFormat === 'txt' ? 'txt' : ctx.sourceFormat === 'doc' ? 'doc' : ctx.sourceFormat === 'odt' ? 'odt' : 'docx';
-  const staged = path.join(inputDir, `source.${ext}`);
-
-  if (ctx.sourceFormat !== 'txt') {
-    await fs.copyFile(ctx.sourcePath, staged);
-    return staged;
-  }
-
-  const stat = await fs.stat(ctx.sourcePath);
-  if (stat.size > MAX_TEXT_BYTES) {
-    throw new MorphError('INPUT_TOO_LARGE', 'This text file is too large to convert to a document (limit 100 MB).');
-  }
-  const raw = await fs.readFile(ctx.sourcePath);
-  let text: string;
-  if (raw[0] === 0xff && raw[1] === 0xfe) text = new TextDecoder('utf-16le').decode(raw.subarray(2));
-  else if (raw[0] === 0xfe && raw[1] === 0xff) text = new TextDecoder('utf-16be').decode(raw.subarray(2));
-  else {
-    try {
-      text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
-    } catch {
-      text = new TextDecoder('windows-1252').decode(raw);
+/** Builds the HTML for the source document. Everything runs inside Morph; no other program is involved. */
+async function buildHtml(ctx: EngineContext): Promise<{ body: string; warnings: string[]; page: PageSpec | null; faithful: boolean }> {
+  switch (ctx.sourceFormat) {
+    case 'docx': {
+      const result = await docxToHtml(ctx.sourcePath);
+      return { body: result.body, warnings: result.warnings, page: result.page, faithful: true };
     }
+    case 'odt': {
+      const result = await odtToHtml(ctx.sourcePath);
+      return { body: result.html, warnings: result.warnings, page: result.page, faithful: true };
+    }
+    case 'doc':
+      return { page: null, faithful: false, body: await legacyDocToHtml(ctx.sourcePath), warnings: ['Legacy .doc files can only be read as text: formatting, tables and pictures are not included. Save the file as DOCX in Word for a faithful conversion.'] };
+    case 'txt':
+      return { body: await txtToHtml(ctx.sourcePath), warnings: [], page: null, faithful: false };
+    default:
+      throw new MorphError('UNSUPPORTED_FORMAT', 'That document type is not supported.');
   }
-  text = text.replace(/^\uFEFF/, '');
-  await fs.writeFile(staged, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')]));
-  return staged;
 }
 
-/** Runs LibreOffice headless. Returns the path of the produced file. */
-async function runLibreOffice(ctx: EngineContext, targetFormat: 'pdf' | 'docx' | 'odt', progressRange: [number, number]): Promise<string> {
-  const soffice = requireToolPath(ctx.toolchain, 'soffice', 'converting documents');
-  const target = LO_TARGET[targetFormat];
-  if (!target) throw new MorphError('INTERNAL', `No LibreOffice filter for ${targetFormat}.`);
+async function documentToPdf(ctx: EngineContext, progressRange: [number, number]): Promise<string> {
+  const choice = optString(ctx.options, 'pageSize');
+  const pageSize: PageSize = choice === 'Letter' ? 'Letter' : 'A4';
+  const [from, to] = progressRange;
 
-  const inputDir = path.join(ctx.workDir, 'lo-in');
-  const outDir = path.join(ctx.workDir, 'lo-out');
-  const profileDir = path.join(ctx.workDir, 'lo-profile');
-  await Promise.all([fs.mkdir(inputDir, { recursive: true }), fs.mkdir(outDir, { recursive: true }), fs.mkdir(profileDir, { recursive: true })]);
-
-  const input = await stageInput(ctx, inputDir);
+  ctx.report({ phase: 'Reading document', progress: from });
+  const { body, warnings, page, faithful } = await buildHtml(ctx);
+  for (const warning of warnings) ctx.warn(warning);
   ctx.signal.throwIfAborted();
-  ctx.report({ phase: 'Converting with LibreOffice', progress: progressRange[0] });
 
-  const args = [
-    '--headless',
-    '--invisible',
-    '--norestore',
-    '--nolockcheck',
-    '--nodefault',
-    '--nologo',
-    '--nofirststartwizard',
-    `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
-    '--convert-to',
-    target.filter,
-    '--outdir',
-    outDir,
-    input,
-  ];
+  const htmlPath = path.join(ctx.workDir, 'document.html');
+  const pdfPath = path.join(ctx.workDir, 'document.pdf');
+  // 'auto' keeps the page setup stored in a DOCX; an explicit A4/Letter choice overrides it.
+  const usePage = faithful && choice === 'auto' ? page : null;
+  await fs.writeFile(htmlPath, wrapHtml(body, { variant: faithful ? 'faithful' : 'plain', pageSize, page: usePage }, ctx.baseName), 'utf8');
 
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: process.env.HOME ?? ctx.workDir };
-  const result = await runProcess(soffice, args, { signal: ctx.signal, timeoutMs: CONVERT_TIMEOUT_MS, env, cwd: ctx.workDir });
-  ctx.report({ progress: progressRange[1] });
+  ctx.report({ phase: 'Laying out pages', progress: from + (to - from) * 0.4 });
+  await getHtmlPrinter()({ htmlPath, pdfPath, pageSize }, ctx.signal);
+  ctx.signal.throwIfAborted();
 
-  const produced = path.join(outDir, `source.${target.ext}`);
-  const stat = await fs.stat(produced).catch(() => null);
-  if (result.code !== 0 || !stat || stat.size === 0) {
-    const detail = tailLines(`${result.stderr}\n${result.stdout}`);
-    if (/password/i.test(detail)) {
-      throw new MorphError('PASSWORD_PROTECTED', 'This document is password-protected. Remove the password and try again.', { detail });
-    }
-    if (/source file could not be loaded|general input\/output error|not.*valid/i.test(detail)) {
-      throw new MorphError('CORRUPT_INPUT', 'The document could not be opened. It may be damaged or in an unsupported variant.', { detail });
-    }
-    throw new MorphError('TOOL_FAILED', 'LibreOffice could not convert this document.', { detail: detail || `exit code ${String(result.code)}` });
-  }
-  return produced;
+  const stat = await fs.stat(pdfPath).catch(() => null);
+  if (!stat || stat.size === 0) throw new MorphError('TOOL_FAILED', 'The document could not be turned into a PDF.');
+  ctx.report({ progress: to });
+  return pdfPath;
 }
 
 export async function convertDocument(ctx: EngineContext): Promise<EngineResult> {
   const target = ctx.targetFormat;
 
-  if (target === 'pdf' || target === 'docx' || target === 'odt') {
-    const produced = await runLibreOffice(ctx, target, [0.05, 0.95]);
-    const ext = target;
-    if (target === 'pdf') {
-      ctx.warn('Layout is reproduced by LibreOffice. Fonts that are not installed on this computer are substituted, so pagination can differ slightly from Microsoft Word.');
-    } else if (ctx.sourceFormat !== 'txt') {
-      ctx.warn('Complex formatting, tracked changes and some embedded objects may not survive conversion between word-processor formats.');
-    }
+  if (target === 'pdf') {
+    const pdfPath = await documentToPdf(ctx, [0.02, 0.95]);
+    if (ctx.sourceFormat !== 'txt') ctx.warn('Pages are laid out by Morph, so line and page breaks can differ from Microsoft Word. Headers, footers, text boxes and exact fonts are not reproduced.');
     ctx.report({ progress: 1 });
-    return { files: [{ path: produced, name: `${ctx.baseName}.${ext}` }], packaging: 'single' };
+    return { files: [{ path: pdfPath, name: `${ctx.baseName}.pdf` }], packaging: 'single' };
   }
 
   if (target === 'png' || target === 'jpg') {
-    // Documents are rendered to PDF first, then each page is rasterised.
-    const pdfPath = await runLibreOffice(ctx, 'pdf', [0.02, 0.4]);
+    // Documents are laid out as a PDF first, then each page is rasterised.
+    const pdfPath = await documentToPdf(ctx, [0.02, 0.4]);
     const scaled: EngineContext = {
       ...ctx,
       report(update) {
@@ -127,7 +91,7 @@ export async function convertDocument(ctx: EngineContext): Promise<EngineResult>
         ctx.report({ ...(update.phase ? { phase: update.phase } : {}), ...(progress !== undefined ? { progress } : {}) });
       },
     };
-    ctx.warn('Pages are laid out by LibreOffice, so they can differ slightly from Microsoft Word where fonts are missing.');
+    if (ctx.sourceFormat !== 'txt') ctx.warn('Pages are laid out by Morph, so they can differ from Microsoft Word. Headers, footers, text boxes and exact fonts are not reproduced.');
     return renderPdfToImages(scaled, pdfPath, ctx.baseName);
   }
 

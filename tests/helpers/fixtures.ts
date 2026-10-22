@@ -36,9 +36,9 @@ export function buildPdf(pageCount: number, options: { width?: number; height?: 
   return Buffer.from(out, 'latin1');
 }
 
-async function writeZip(destination: string, entries: Array<{ name: string; data: string; store?: boolean }>): Promise<void> {
+export async function writeZipFile(destination: string, entries: Array<{ name: string; data: string | Buffer; store?: boolean }>): Promise<void> {
   const zip = new yazl.ZipFile();
-  for (const entry of entries) zip.addBuffer(Buffer.from(entry.data, 'utf8'), entry.name, { compress: !entry.store });
+  for (const entry of entries) zip.addBuffer(typeof entry.data === 'string' ? Buffer.from(entry.data, 'utf8') : entry.data, entry.name, { compress: !entry.store });
   zip.end();
   await pipeline(zip.outputStream, createWriteStream(destination));
 }
@@ -47,16 +47,41 @@ const escapeXml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&
 
 export async function writeDocx(destination: string, paragraphs: string[]): Promise<void> {
   const body = paragraphs.map((p) => `<w:p><w:r><w:t xml:space="preserve">${escapeXml(p)}</w:t></w:r></w:p>`).join('');
-  await writeZip(destination, [
+  await writeZipFile(destination, [
     { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
     { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
     { name: 'word/document.xml', data: `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr/></w:body></w:document>` },
   ]);
 }
 
+/** A DOCX with a heading, a bold run, and a two-column table, to check that structure survives. */
+export async function writeRichDocx(destination: string): Promise<void> {
+  const cell = (t: string) => `<w:tc><w:p><w:r><w:t>${escapeXml(t)}</w:t></w:r></w:p></w:tc>`;
+  const body =
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Quarterly Report</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t xml:space="preserve">Revenue was </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>strong</w:t></w:r><w:r><w:t xml:space="preserve"> this quarter.</w:t></w:r></w:p>' +
+    `<w:tbl><w:tr>${cell('Region')}${cell('Total')}</w:tr><w:tr>${cell('North')}${cell('1200')}</w:tr></w:tbl>`;
+  await writeZipFile(destination, [
+    { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { name: 'word/document.xml', data: `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr/></w:body></w:document>` },
+  ]);
+}
+
+/** An ODT with a heading, bold text (via an automatic style), and a table. */
+export async function writeRichOdt(destination: string): Promise<void> {
+  const ns = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+  const content = `<?xml version="1.0" encoding="UTF-8"?><office:document-content ${ns} office:version="1.2"><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:h text:outline-level="1">Meeting Notes</text:h><text:p>Decision: <text:span text:style-name="T1">approved</text:span> by all.</text:p><table:table><table:table-row><table:table-cell><text:p>Owner</text:p></table:table-cell><table:table-cell><text:p>Task</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell><text:p>Sam</text:p></table:table-cell><table:table-cell><text:p>Ship it</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>`;
+  await writeZipFile(destination, [
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', store: true },
+    { name: 'META-INF/manifest.xml', data: '<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>' },
+    { name: 'content.xml', data: content },
+  ]);
+}
+
 export async function writeOdt(destination: string, paragraphs: string[]): Promise<void> {
   const body = paragraphs.map((p) => `<text:p>${escapeXml(p)}</text:p>`).join('');
-  await writeZip(destination, [
+  await writeZipFile(destination, [
     { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', store: true },
     { name: 'META-INF/manifest.xml', data: '<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>' },
     { name: 'content.xml', data: `<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2"><office:body><office:text>${body}</office:text></office:body></office:document-content>` },
@@ -129,4 +154,23 @@ export async function buildAnimatedGif(width = 32, height = 32): Promise<Buffer>
 export async function writeFile(destination: string, data: Buffer | string): Promise<string> {
   await fs.writeFile(destination, data);
   return destination;
+}
+
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+
+/** Builds a DOCX from raw WordprocessingML parts, for tests that need exact control over formatting. */
+export async function writeCustomDocx(
+  destination: string,
+  parts: { body: string; styles?: string; numbering?: string; rels?: string; media?: Record<string, Buffer> },
+): Promise<void> {
+  const entries: Array<{ name: string; data: string | Buffer }> = [
+    { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { name: 'word/document.xml', data: `<?xml version="1.0" encoding="UTF-8"?><w:document ${W_NS}><w:body>${parts.body}</w:body></w:document>` },
+  ];
+  if (parts.styles) entries.push({ name: 'word/styles.xml', data: `<?xml version="1.0" encoding="UTF-8"?><w:styles ${W_NS}>${parts.styles}</w:styles>` });
+  if (parts.numbering) entries.push({ name: 'word/numbering.xml', data: `<?xml version="1.0" encoding="UTF-8"?><w:numbering ${W_NS}>${parts.numbering}</w:numbering>` });
+  if (parts.rels) entries.push({ name: 'word/_rels/document.xml.rels', data: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${parts.rels}</Relationships>` });
+  for (const [name, data] of Object.entries(parts.media ?? {})) entries.push({ name: `word/media/${name}`, data });
+  await writeZipFile(destination, entries);
 }

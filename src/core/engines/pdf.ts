@@ -1,10 +1,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
+import { PDFiumLibrary, type PDFiumDocument } from '@hyzyla/pdfium';
 import { MorphError } from '../../shared/errors';
 import { optNumber, optString, type OptionSpec } from '../../shared/options';
 import type { FileDetails } from '../../shared/types';
-import { requireToolPath } from '../tools';
-import { runProcess, tailLines } from '../proc';
 import type { EngineContext, EngineResult, WorkFile } from './types';
 
 export interface PdfInfo {
@@ -12,13 +12,12 @@ export interface PdfInfo {
   /** First page size in PDF points (1/72 inch). */
   widthPt: number;
   heightPt: number;
-  encrypted: boolean;
 }
 
 /** Longest side Morph will render, in pixels. Prevents multi-gigabyte bitmaps from huge page sizes. */
 const MAX_SIDE_PX = 12_000;
 const MAX_PAGES = 5000;
-const PAGE_TIMEOUT_MS = 5 * 60_000;
+const MAX_PDF_BYTES = 1024 * 1024 * 1024;
 
 export const pdfImageOptionSpecs: OptionSpec[] = [
   {
@@ -96,122 +95,125 @@ export function pageLabel(page: number, pageCount: number): string {
   return String(page).padStart(Math.max(3, String(pageCount).length), '0');
 }
 
-export function parsePdfInfo(stdout: string): PdfInfo {
-  const pagesMatch = /^Pages:\s+(\d+)/m.exec(stdout);
-  if (!pagesMatch) throw new MorphError('CORRUPT_INPUT', 'The PDF has no readable pages.');
-  const sizeMatch = /^Page\s+size:\s+([\d.]+)\s+x\s+([\d.]+)\s+pts/m.exec(stdout);
-  const encrypted = /^Encrypted:\s+yes/m.test(stdout);
-  return {
-    pages: Number(pagesMatch[1]),
-    widthPt: sizeMatch ? Number(sizeMatch[1]) : 612,
-    heightPt: sizeMatch ? Number(sizeMatch[2]) : 792,
-    encrypted,
-  };
+
+// ---------------------------------------------------------------------------------------------
+// PDFium (bundled WebAssembly build; no external program involved)
+
+let libraryPromise: Promise<PDFiumLibrary> | null = null;
+function getLibrary(): Promise<PDFiumLibrary> {
+  libraryPromise ??= PDFiumLibrary.init().catch((error: unknown) => {
+    libraryPromise = null;
+    throw new MorphError('INTERNAL', 'The built-in PDF renderer could not start.', { detail: String(error) });
+  });
+  return libraryPromise;
 }
 
-function classifyPopplerFailure(stderr: string): MorphError {
-  const detail = tailLines(stderr);
-  if (/incorrect password|password/i.test(stderr)) {
-    return new MorphError('PASSWORD_PROTECTED', 'This PDF is password-protected. Remove the password and try again.', { detail });
-  }
-  if (/permission error|copying of text from this document is not allowed/i.test(stderr)) {
-    return new MorphError('PASSWORD_PROTECTED', 'This PDF restricts how it may be processed.', { detail });
-  }
-  if (/syntax error|couldn't read|may not be a pdf|damaged|xref|trailer/i.test(stderr)) {
-    return new MorphError('CORRUPT_INPUT', 'The PDF is damaged and could not be read.', { detail });
-  }
-  return new MorphError('TOOL_FAILED', 'The PDF renderer reported an error.', { detail });
+function classifyPdfiumFailure(error: unknown): MorphError {
+  const text = error instanceof Error ? error.message : String(error);
+  if (/password/i.test(text)) return new MorphError('PASSWORD_PROTECTED', 'This PDF is password-protected. Remove the password and try again.', { detail: text });
+  return new MorphError('CORRUPT_INPUT', 'The PDF is damaged or not a valid PDF and could not be read.', { detail: text });
 }
 
-export async function readPdfInfo(pdfinfoPath: string, pdfPath: string, signal?: AbortSignal): Promise<PdfInfo> {
-  const result = await runProcess(pdfinfoPath, [pdfPath], { timeoutMs: 60_000, ...(signal ? { signal } : {}) });
-  if (result.code !== 0) throw classifyPopplerFailure(result.stderr);
-  return parsePdfInfo(result.stdout);
-}
-
-export async function inspectPdf(pdfinfoPath: string | undefined, pdfPath: string): Promise<FileDetails> {
-  if (!pdfinfoPath) return {};
+async function openPdf(pdfPath: string): Promise<{ doc: PDFiumDocument; info: PdfInfo }> {
+  const stat = await fs.stat(pdfPath);
+  if (stat.size > MAX_PDF_BYTES) throw new MorphError('INPUT_TOO_LARGE', 'This PDF is larger than 1 GB, which is more than Morph can open.');
+  const [library, bytes] = await Promise.all([getLibrary(), fs.readFile(pdfPath)]);
+  let doc: PDFiumDocument;
   try {
-    const info = await readPdfInfo(pdfinfoPath, pdfPath);
-    return { pages: info.pages, width: Math.round(info.widthPt), height: Math.round(info.heightPt) };
+    doc = await library.loadDocument(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
   } catch (error) {
-    if (error instanceof MorphError && (error.code === 'PASSWORD_PROTECTED' || error.code === 'CORRUPT_INPUT')) throw error;
-    return {};
+    throw classifyPdfiumFailure(error);
+  }
+  try {
+    const pages = doc.getPageCount();
+    if (pages < 1) throw new MorphError('CORRUPT_INPUT', 'The PDF has no readable pages.');
+    const first = doc.getPage(0);
+    const { originalWidth, originalHeight } = first.getOriginalSize();
+    first.close();
+    return { doc, info: { pages, widthPt: originalWidth, heightPt: originalHeight } };
+  } catch (error) {
+    doc.destroy();
+    throw error instanceof MorphError ? error : classifyPdfiumFailure(error);
   }
 }
 
-/** Renders PDF pages to PNG/JPG, one Poppler process per page so progress and cancellation are precise. */
+export async function inspectPdf(pdfPath: string): Promise<FileDetails> {
+  const { doc, info } = await openPdf(pdfPath);
+  doc.destroy();
+  return { pages: info.pages, width: Math.round(info.widthPt), height: Math.round(info.heightPt) };
+}
+
+/** Renders PDF pages to PNG/JPG with the bundled PDFium, one page at a time (precise progress and cancellation). */
 export async function renderPdfToImages(ctx: EngineContext, pdfPath: string, nameBase: string): Promise<EngineResult> {
   const target = ctx.targetFormat;
   if (target !== 'png' && target !== 'jpg') throw new MorphError('INTERNAL', 'PDF rendering supports PNG and JPG only.');
 
-  const pdftoppm = requireToolPath(ctx.toolchain, 'pdftoppm', 'rendering PDF pages');
-  const pdfinfo = requireToolPath(ctx.toolchain, 'pdfinfo', 'reading PDF pages');
-
   ctx.report({ phase: 'Reading PDF', progress: null });
-  const info = await readPdfInfo(pdfinfo, pdfPath, ctx.signal);
-  if (info.encrypted) ctx.warn('This PDF is encrypted but allows viewing, so it was rendered normally.');
-  if (info.pages > MAX_PAGES) {
-    throw new MorphError('INPUT_TOO_LARGE', `This PDF has ${info.pages.toLocaleString('en-US')} pages, more than the ${MAX_PAGES.toLocaleString('en-US')} Morph can render at once. Choose a page range.`);
-  }
-
-  const pages = parsePageRange(optString(ctx.options, 'pageRange'), info.pages);
-  let dpi = Number(optString(ctx.options, 'dpi'));
-  const longestPt = Math.max(info.widthPt, info.heightPt);
-  const projected = (longestPt / 72) * dpi;
-  if (projected > MAX_SIDE_PX) {
-    const reduced = Math.max(36, Math.floor((MAX_SIDE_PX / longestPt) * 72));
-    ctx.warn(`The pages are very large, so the resolution was lowered from ${dpi} to ${reduced} DPI to keep the images manageable.`);
-    dpi = reduced;
-  }
-
-  const ext = target === 'jpg' ? 'jpg' : 'png';
-  const pagesDir = path.join(ctx.workDir, 'pages');
-  await fs.mkdir(pagesDir, { recursive: true });
-
-  const files: WorkFile[] = [];
-  const failures: number[] = [];
-  let lastError: MorphError | null = null;
-
-  for (const [index, page] of pages.entries()) {
-    ctx.signal.throwIfAborted();
-    ctx.report({ phase: `Rendering page ${page} of ${info.pages}`, progress: index / pages.length });
-
-    const outBase = path.join(pagesDir, `p${page}`);
-    const args = [target === 'jpg' ? '-jpeg' : '-png', '-r', String(dpi), '-f', String(page), '-l', String(page), '-singlefile'];
-    if (target === 'jpg') args.push('-jpegopt', `quality=${optNumber(ctx.options, 'quality')}`);
-    args.push(pdfPath, outBase);
-
-    try {
-      const result = await runProcess(pdftoppm, args, { signal: ctx.signal, timeoutMs: PAGE_TIMEOUT_MS });
-      if (result.code !== 0) throw classifyPopplerFailure(result.stderr);
-      const produced = `${outBase}.${ext}`;
-      const stat = await fs.stat(produced).catch(() => null);
-      if (!stat || stat.size === 0) throw new MorphError('TOOL_FAILED', `Page ${page} produced no image.`, { detail: tailLines(result.stderr) });
-      const name = `${nameBase}_page_${pageLabel(page, info.pages)}.${ext}`;
-      files.push({ path: produced, name });
-    } catch (error) {
-      if (error instanceof MorphError && (error.code === 'CANCELLED' || error.code === 'TOOL_MISSING' || error.code === 'PASSWORD_PROTECTED' || error.code === 'TIMEOUT')) throw error;
-      // A damaged page should not discard the rest of the document.
-      failures.push(page);
-      lastError = error instanceof MorphError ? error : new MorphError('TOOL_FAILED', `Page ${page} could not be rendered.`);
-      ctx.log.warn('page render failed', { page, error: String(error) });
+  const { doc, info } = await openPdf(pdfPath);
+  try {
+    if (info.pages > MAX_PAGES) {
+      throw new MorphError('INPUT_TOO_LARGE', `This PDF has ${info.pages.toLocaleString('en-US')} pages, more than the ${MAX_PAGES.toLocaleString('en-US')} Morph can render at once. Choose a page range.`);
     }
-  }
+    const pages = parsePageRange(optString(ctx.options, 'pageRange'), info.pages);
+    const requestedDpi = Number(optString(ctx.options, 'dpi'));
+    const ext = target === 'jpg' ? 'jpg' : 'png';
+    const pagesDir = path.join(ctx.workDir, 'pages');
+    await fs.mkdir(pagesDir, { recursive: true });
 
-  if (files.length === 0) throw lastError ?? new MorphError('TOOL_FAILED', 'No pages could be rendered.');
-  if (failures.length > 0) {
-    ctx.warn(`${failures.length} page${failures.length === 1 ? '' : 's'} could not be rendered and ${failures.length === 1 ? 'was' : 'were'} skipped (page${failures.length === 1 ? '' : 's'} ${failures.join(', ')}). The result contains the ${files.length} page${files.length === 1 ? '' : 's'} that rendered.`);
-  }
+    const files: WorkFile[] = [];
+    const failures: number[] = [];
+    let lastError: MorphError | null = null;
+    let reduced = false;
 
-  ctx.report({ progress: 1, phase: 'Rendered' });
-  const forceZip = optString(ctx.options, 'packaging') === 'zip';
-  const single = files.length === 1 && !forceZip;
-  const onlyFile = files[0];
-  if (single && onlyFile && info.pages === 1) {
-    // A genuinely one-page document is named after the document itself (report.pdf -> report.png).
-    // A single page picked out of a longer document keeps its page number.
-    onlyFile.name = `${nameBase}.${ext}`;
+    for (const [index, pageNumber] of pages.entries()) {
+      ctx.signal.throwIfAborted();
+      ctx.report({ phase: `Rendering page ${pageNumber} of ${info.pages}`, progress: index / pages.length });
+      let page;
+      try {
+        page = doc.getPage(pageNumber - 1);
+        const { originalWidth, originalHeight } = page.getOriginalSize();
+        let dpi = requestedDpi;
+        const longestPt = Math.max(originalWidth, originalHeight);
+        if ((longestPt / 72) * dpi > MAX_SIDE_PX) {
+          dpi = Math.max(36, Math.floor((MAX_SIDE_PX / longestPt) * 72));
+          reduced = true;
+        }
+        const bitmap = await page.render({ scale: dpi / 72, render: 'bitmap', renderFormFields: true });
+        const image = sharp(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), {
+          raw: { width: bitmap.width, height: bitmap.height, channels: 4 },
+        }).flatten({ background: '#ffffff' });
+        const out = path.join(pagesDir, `p${pageNumber}.${ext}`);
+        if (target === 'jpg') await image.jpeg({ quality: optNumber(ctx.options, 'quality'), mozjpeg: false }).withMetadata({ density: dpi }).toFile(out);
+        else await image.png({ compressionLevel: 6 }).withMetadata({ density: dpi }).toFile(out);
+        files.push({ path: out, name: `${nameBase}_page_${pageLabel(pageNumber, info.pages)}.${ext}` });
+      } catch (error) {
+        if (error instanceof MorphError && error.code === 'CANCELLED') throw error;
+        if (ctx.signal.aborted) throw error;
+        failures.push(pageNumber);
+        lastError = error instanceof MorphError ? error : new MorphError('TOOL_FAILED', `Page ${pageNumber} could not be rendered.`, { detail: String(error) });
+        ctx.log.warn('page render failed', { page: pageNumber, error: String(error) });
+      } finally {
+        page?.close();
+      }
+    }
+
+    if (reduced) ctx.warn('Some pages are very large, so their resolution was lowered to keep the images manageable.');
+    if (files.length === 0) throw lastError ?? new MorphError('TOOL_FAILED', 'No pages could be rendered.');
+    if (failures.length > 0) {
+      ctx.warn(`${failures.length} page${failures.length === 1 ? '' : 's'} could not be rendered and ${failures.length === 1 ? 'was' : 'were'} skipped (page${failures.length === 1 ? '' : 's'} ${failures.join(', ')}). The result contains the ${files.length} page${files.length === 1 ? '' : 's'} that rendered.`);
+    }
+
+    ctx.report({ progress: 1, phase: 'Rendered' });
+    const forceZip = optString(ctx.options, 'packaging') === 'zip';
+    const single = files.length === 1 && !forceZip;
+    const onlyFile = files[0];
+    if (single && onlyFile && info.pages === 1) {
+      // A genuinely one-page document is named after the document itself (report.pdf -> report.png).
+      // A single page picked out of a longer document keeps its page number.
+      onlyFile.name = `${nameBase}.${ext}`;
+    }
+    return { files, packaging: single ? 'single' : 'zip' };
+  } finally {
+    doc.destroy();
   }
-  return { files, packaging: single ? 'single' : 'zip' };
 }

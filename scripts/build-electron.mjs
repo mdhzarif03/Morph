@@ -16,7 +16,7 @@ const common = {
   outExtension: { '.js': '.cjs' },
   logLevel: 'info',
   // Native or binary-carrying packages are resolved at runtime from node_modules.
-  external: ['electron', 'sharp', 'ffmpeg-static', '@ffprobe-installer/ffprobe'],
+  external: ['electron', 'sharp', '@hyzyla/pdfium', 'word-extractor', 'ffmpeg-static', '@ffprobe-installer/ffprobe'],
   legalComments: 'none',
 };
 

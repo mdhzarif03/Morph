@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageLabel, parsePageRange, parsePdfInfo } from '../../src/core/engines/pdf';
+import { pageLabel, parsePageRange } from '../../src/core/engines/pdf';
 
 describe('page ranges', () => {
   it('parses lists, ranges and open ends', () => {
@@ -18,16 +18,5 @@ describe('page ranges', () => {
   it('pads page numbers to at least three digits', () => {
     expect(pageLabel(7, 12)).toBe('007');
     expect(pageLabel(7, 1500)).toBe('0007');
-  });
-});
-
-describe('pdfinfo parsing', () => {
-  it('reads pages, size and encryption', () => {
-    const out = 'Title: x\nEncrypted:      no\nPages:          12\nPage size:      595.276 x 841.89 pts (A4)\n';
-    expect(parsePdfInfo(out)).toEqual({ pages: 12, widthPt: 595.276, heightPt: 841.89, encrypted: false });
-    expect(parsePdfInfo('Pages: 1\nEncrypted: yes (print:yes copy:no)').encrypted).toBe(true);
-  });
-  it('treats output without pages as a corrupt file', () => {
-    expect(() => parsePdfInfo('garbage')).toThrowError(expect.objectContaining({ code: 'CORRUPT_INPUT' }));
   });
 });

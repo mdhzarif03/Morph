@@ -4,7 +4,7 @@ import { normalizeOptions, type OptionSpec, type OptionValues } from '../shared/
 import type { TargetDescriptor, ToolId, ToolchainSnapshot } from '../shared/types';
 import { convertImage, IMAGE_FORMATS, imageNotes, imageOptionSpecs, type QualityDefaults } from './engines/image';
 import { AUDIO_FORMATS, VIDEO_FORMATS, audioOptionSpecs, convertMedia, mediaNotes, mediaUnavailableReason, videoOptionSpecs } from './engines/media';
-import { convertDocument } from './engines/office';
+import { convertDocument, documentPageOptionSpecs } from './engines/office';
 import { pdfImageOptionsFor, renderPdfToImages } from './engines/pdf';
 import type { EngineContext, EngineResult } from './engines/types';
 
@@ -29,6 +29,12 @@ export interface Route {
 
 const DOC_SOURCES: readonly FormatId[] = ['docx', 'doc', 'odt', 'txt'];
 
+function documentNotes(source: FormatId): string[] {
+  if (source === 'txt') return ['Text is set in a monospaced font and wrapped to the page.'];
+  if (source === 'doc') return ['Old .doc files are read as plain text only (no formatting, tables or pictures).'];
+  return ['Text, headings, lists, tables and pictures are kept. Headers, footers, text boxes and exact fonts are not reproduced, so page breaks can differ from Word.'];
+}
+
 const TARGET_DESCRIPTIONS: Partial<Record<FormatId, string>> = {
   png: 'Lossless, supports transparency',
   jpg: 'Small photos, no transparency',
@@ -39,8 +45,6 @@ const TARGET_DESCRIPTIONS: Partial<Record<FormatId, string>> = {
   gif: 'Up to 256 colours, supports animation',
   ico: 'Windows icon with multiple sizes',
   pdf: 'Portable document',
-  docx: 'Editable Word document',
-  odt: 'Editable OpenDocument text',
   mp3: 'Compatible lossy audio',
   wav: 'Uncompressed audio',
   flac: 'Lossless compressed audio',
@@ -77,7 +81,7 @@ function buildRoutes(): Route[] {
     routes.push({
       source: 'pdf',
       target,
-      requires: ['pdftoppm', 'pdfinfo'],
+      requires: [],
       description: 'One image per page, packaged as a ZIP for several pages',
       options: () => pdfImageOptionsFor(target),
       notes: () => ['Pages are named like document_page_001 and keep their order.'],
@@ -85,49 +89,28 @@ function buildRoutes(): Route[] {
     });
   }
 
-  // Word-processor documents
+  // Word-processor documents (laid out by Morph itself; nothing else needs to be installed)
   for (const source of DOC_SOURCES) {
     routes.push({
       source,
       target: 'pdf',
-      requires: ['soffice'],
+      requires: [],
       description: TARGET_DESCRIPTIONS.pdf ?? '',
-      options: () => [],
-      notes: () => [
-        'Converted with LibreOffice. Layout can differ slightly from Microsoft Word, especially when fonts are missing.',
-        ...(source === 'txt' ? ['Text is set in the default LibreOffice font.'] : []),
-      ],
+      options: () => documentPageOptionSpecs,
+      notes: () => documentNotes(source),
       run: convertDocument,
     });
     for (const target of ['png', 'jpg'] as const) {
       routes.push({
         source,
         target,
-        requires: ['soffice', 'pdftoppm', 'pdfinfo'],
+        requires: [],
         description: 'One image per page, packaged as a ZIP for several pages',
-        options: () => pdfImageOptionsFor(target),
-        notes: () => ['The document is rendered through LibreOffice, then each page is rasterised.'],
+        options: () => [...documentPageOptionSpecs, ...pdfImageOptionsFor(target)],
+        notes: () => documentNotes(source),
         run: convertDocument,
       });
     }
-  }
-  for (const [source, target] of [
-    ['docx', 'odt'],
-    ['odt', 'docx'],
-    ['doc', 'docx'],
-    ['doc', 'odt'],
-    ['txt', 'docx'],
-    ['txt', 'odt'],
-  ] as const) {
-    routes.push({
-      source,
-      target,
-      requires: ['soffice'],
-      description: TARGET_DESCRIPTIONS[target] ?? '',
-      options: () => [],
-      notes: () => ['Complex formatting, tracked changes and embedded objects may not survive conversion between word-processor formats.'],
-      run: convertDocument,
-    });
   }
 
   // Audio / video
