@@ -9,6 +9,8 @@ export const SettingsSchema = z.strictObject({
   /** When false the popup appears without taking keyboard focus, so typing in other apps is not interrupted. */
   focusOnOpen: z.boolean().default(false),
   hideOnBlur: z.boolean().default(true),
+  /** 'system' follows Windows' light/dark setting. */
+  theme: z.enum(['system', 'light', 'dark']).default('system'),
   notifications: z.boolean().default(true),
   outputNaming: z.enum(['same-name', 'suffix']).default('same-name'),
   outputSuffix: z
@@ -43,6 +45,7 @@ export const SettingsPatchSchema = z.strictObject({
   launchAtLogin: z.boolean().optional(),
   focusOnOpen: z.boolean().optional(),
   hideOnBlur: z.boolean().optional(),
+  theme: z.enum(['system', 'light', 'dark']).optional(),
   notifications: z.boolean().optional(),
   outputNaming: z.enum(['same-name', 'suffix']).optional(),
   // Defined without a default: a default inside a patch would silently reset the suffix on every unrelated update.

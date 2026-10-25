@@ -3,7 +3,7 @@
 **Files, transformed.** A local-first universal file converter for Windows 10/11 (x64).
 Press one shortcut, drop a file, pick a format, done. Nothing leaves your computer.
 
-> Status: early release (0.1.0). Developed and tested on Linux; the app has been run on Windows 11 with `npm run dev`. The Windows installer is cross-built and has not been tested on a clean Windows machine. See [Known limitations](#known-limitations).
+> Status: release 0.2.0. Developed and tested on Linux (unit, integration and Electron end-to-end tests); the app has been run on Windows 11 with `npm run dev`. The Windows installer is unsigned and has not been tested on a clean Windows machine. See [Known limitations](#known-limitations).
 
 <!-- Screenshots: add docs/screenshots/*.png and reference them here before publishing. -->
 
@@ -14,15 +14,20 @@ Press one shortcut, drop a file, pick a format, done. Nothing leaves your comput
 - Only formats that make sense for the dropped file, and that your installed tools can produce, are offered.
 - Output goes next to the original by default. Originals are never modified; existing files are never overwritten (`logo (1).webp`).
 - No telemetry, no accounts, no cloud. Tools are never downloaded automatically.
+- **Merge and split PDFs** (the PDF tools button in the header). Every page is shown as a thumbnail before you merge or split: untick pages to leave them out, reorder files, extract chosen pages, split every page, at page ranges (`1-3, 4-6, 9-`) or every N pages.
+- **Light, dark or system theme** in Settings, Appearance.
+- If the shortcut cannot be recorded by pressing keys, type it (for example `Ctrl+Alt+M`) in Settings.
+- The popup always reopens on the main page.
 - Tray icon (Open, Settings, Quit). Launch at login is off by default.
 
 ## Conversions
 
 | Category | From | To | Needs |
 | --- | --- | --- | --- |
-| Images | PNG, JPG, WebP, AVIF, BMP, TIFF, GIF, ICO | the same set | built in (Sharp) |
+| Images | PNG, JPG, WebP, AVIF, BMP, TIFF, GIF, ICO | the same set, and PDF | built in (Sharp) |
 | Documents | DOCX, DOC (text only), ODT, TXT | PDF, PNG, JPG | built in (laid out by Morph, rendered by PDFium) |
 | PDF | PDF | PNG, JPG per page (ZIP when more than one page) | built in (PDFium) |
+| PDF tools | PDF | merged PDF; extracted or split PDFs | built in (pdf-lib) |
 | Audio | MP3, WAV, FLAC, AAC, OGG, M4A | the same set | FFmpeg (ships inside the installer) |
 | Video | MP4, MKV, MOV, WebM, AVI | the same containers, or audio only | FFmpeg (ships inside the installer) |
 
@@ -73,6 +78,8 @@ Context isolation on, Node integration off, strict CSP, a minimal typed preload 
 
 - The Windows installer, Windows shortcut registration, tray and launch-at-login behaviour have not been tested on a real Windows machine.
 - Document layout is done by Morph, not by Word: DOCX and ODT fonts, sizes, colours, alignment, spacing, lists, tables, pictures and page size/margins are reproduced, but headers, footers, footnotes, columns, text boxes and tracked changes are not, fonts not installed on the machine are substituted, and page breaks can differ slightly. Legacy `.doc` files are converted as plain text only. Save as DOCX for the best result.
+- Merging and splitting copies pages with pdf-lib: page content is unchanged, but bookmarks, form fields and document-level metadata are not carried over. Merge and split are limited to 100 files, 1 GB of input and 10,000 pages.
+- Animated GIF/WebP to PNG or JPG gives the first frame by default; choose "Every frame" to get all frames as numbered images in a ZIP.
 - Encrypted PDFs and password-protected documents are rejected, not unlocked.
 - No code signing; Windows SmartScreen will warn on unsigned builds.
 

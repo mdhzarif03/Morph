@@ -275,3 +275,161 @@ test('diagnostics lists external tools', async () => {
   await page.keyboard.press('Escape'); // Escape leaves Settings first
   await expect(page.getByText('Drop a file here')).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------------------------
+// Merge / split, theme, popup reset, shortcut entry
+
+/** Hides the popup, then reopens it the way the shortcut, tray and a second launch do (focused). */
+async function hideAndReshow(): Promise<void> {
+  await app.evaluate(async ({ app: electronApp, BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.hide();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    electronApp.emit('second-instance', {}, [], '');
+  });
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible() ?? false)).toBe(true);
+}
+
+test('merges two PDFs after showing their pages, honouring an unticked page', async () => {
+  const dir = mkdtempSync(path.join(work, 'merge-'));
+  const a = path.join(dir, 'first.pdf');
+  const b = path.join(dir, 'second.pdf');
+  writeFileSync(a, buildPdf(3, { label: 'First' }));
+  writeFileSync(b, buildPdf(2, { label: 'Second' }));
+
+  await page.getByRole('button', { name: /PDF tools/ }).click();
+  await expect(page.getByRole('heading', { name: 'PDF tools' })).toBeVisible();
+  await stubFileDialog([a, b]);
+  await page.getByRole('button', { name: 'Browse PDFs' }).click();
+
+  // Every page of both files is previewed.
+  const thumbs = page.locator('ul[aria-label="Pages"] img');
+  await expect(thumbs).toHaveCount(5, { timeout: 30_000 });
+  for (const src of await thumbs.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src))) expect(src.startsWith('data:image/jpeg')).toBe(true);
+  await settle();
+  await page.screenshot({ path: path.join(shots, '10-pdf-merge.png') });
+
+  // Untick page 2 of the first file, then merge.
+  await page.getByRole('button', { name: /^Page 2, included/ }).first().click();
+  await expect(page.getByText('2 of 3 pages included')).toBeVisible();
+  await page.getByRole('button', { name: 'Merge', exact: true }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect(readdirSync(dir).sort()).toEqual(['first.pdf', 'first_merged.pdf', 'second.pdf']);
+  const text = (await pdfPageTexts(path.join(dir, 'first_merged.pdf'))).map((t) => t.replace(/[\s·]+/g, ''));
+  expect(text).toEqual(['First1', 'First3', 'Second1', 'Second2']);
+});
+
+test('splits a PDF into the chosen pages with a preview of every page', async () => {
+  const dir = mkdtempSync(path.join(work, 'split-'));
+  const src = path.join(dir, 'book.pdf');
+  writeFileSync(src, buildPdf(4, { label: 'Pg' }));
+
+  await page.getByRole('button', { name: /PDF tools/ }).click();
+  await page.getByRole('tab', { name: 'Split or extract' }).click();
+  await stubFileDialog([src]);
+  await page.getByRole('button', { name: 'Browse PDFs' }).click();
+  await expect(page.locator('ul[aria-label="Pages"] img')).toHaveCount(4, { timeout: 30_000 });
+  await settle();
+  await page.screenshot({ path: path.join(shots, '11-pdf-split.png') });
+
+  await page.getByRole('button', { name: 'None' }).click();
+  await page.getByRole('button', { name: /^Page 2, not included/ }).click();
+  await page.getByRole('button', { name: /^Page 4, not included/ }).click({ modifiers: ['Shift'] });
+  await expect(page.getByText('3 of 4 selected')).toBeVisible(); // shift+click selected pages 2-4
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect(readdirSync(dir).sort()).toEqual(['book.pdf', 'book_pages_2-4.pdf']);
+  expect((await pdfPageTexts(path.join(dir, 'book_pages_2-4.pdf'))).map((t) => t.replace(/[\s·]+/g, ''))).toEqual(['Pg2', 'Pg3', 'Pg4']);
+});
+
+test('offers image and PDF targets for a WebP and converts it to PNG', async () => {
+  const dir = mkdtempSync(path.join(work, 'webp-'));
+  const still = path.join(dir, 'photo.webp');
+  writeFileSync(still, await sharp(await buildTransparentPng(40)).webp().toBuffer());
+  await dropFiles([still]);
+  await expect(page.getByText('photo.webp').first()).toBeVisible();
+  const offered = (await page.getByRole('radio').allTextContents()).sort();
+  expect(offered).toEqual(expect.arrayContaining(['PNG', 'JPG', 'PDF', 'GIF', 'BMP', 'TIFF', 'AVIF', 'ICO']));
+  await page.getByRole('radio', { name: 'PNG' }).click();
+  await page.getByRole('button', { name: /^Convert/ }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+  expect((await sharp(path.join(dir, 'photo.png')).metadata()).format).toBe('png');
+});
+
+test('theme: light, dark and system change the popup colours', async () => {
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await openSettings();
+  await page.getByRole('radio', { name: 'Light' }).click();
+  await expect.poll(bg).toBe('rgb(246, 247, 250)');
+  await settle();
+  await page.screenshot({ path: path.join(shots, '12-light-settings.png') });
+  await page.getByRole('radio', { name: 'Dark' }).click();
+  await expect.poll(bg).toBe('rgb(20, 21, 24)');
+  await page.getByRole('radio', { name: 'System' }).click();
+  // System: no override, so the page follows whatever the OS reports through prefers-color-scheme.
+  const systemDark = await page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches);
+  await expect.poll(bg).toBe(systemDark ? 'rgb(20, 21, 24)' : 'rgb(246, 247, 250)');
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBeUndefined();
+  expect(await app.evaluate(({ nativeTheme }) => nativeTheme.themeSource)).toBe('system');
+  await page.keyboard.press('Escape');
+});
+
+test('reopening the popup returns to the main page, even after a finished conversion', async () => {
+  const dir = mkdtempSync(path.join(work, 'reopen-'));
+  const src = path.join(dir, 'pic.png');
+  writeFileSync(src, await buildTransparentPng(30));
+  await dropFiles([src]);
+  await page.getByRole('radio', { name: 'JPG' }).click();
+  await page.getByRole('button', { name: /^Convert/ }).click();
+  await expect(page.getByText('Saved as')).toBeVisible({ timeout: 60_000 });
+
+  await hideAndReshow();
+  await expect(page.getByText('Drop a file here')).toBeVisible();
+  await expect(page.getByText('Saved as')).toHaveCount(0);
+
+  // Settings is also left behind.
+  await openSettings();
+  await hideAndReshow();
+  await expect(page.getByText('Drop a file here')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Settings' })).toHaveCount(0);
+
+  // A file added but not converted is dropped too.
+  await dropFiles([src]);
+  await expect(page.getByText('pic.png').first()).toBeVisible();
+  await hideAndReshow();
+  await expect(page.getByText('Drop a file here')).toBeVisible();
+});
+
+test('typing a shortcut works, and recording keeps the popup open when focus is lost', async () => {
+  await openSettings();
+  await page.locator('#shortcut-typed').fill('Ctrl+Alt+K');
+  await page.getByRole('button', { name: 'Set', exact: true }).click();
+  await expect(page.getByText('Shortcut set to Ctrl + Alt + K.')).toBeVisible();
+  expect(await app.evaluate(({ globalShortcut }) => ({ old: globalShortcut.isRegistered('Ctrl+Shift+C'), next: globalShortcut.isRegistered('Ctrl+Alt+K') }))).toEqual({ old: false, next: true });
+
+  // While recording, losing focus (Windows' input-language switcher does this) must not close the popup.
+  await page.getByRole('button', { name: /Global shortcut/ }).click();
+  await expect(page.getByText('Press the new shortcut…')).toBeVisible();
+  const visibleWhileRecording = await app.evaluate(async ({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win?.emit('blur');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return win?.isVisible() ?? false;
+  });
+  expect(visibleWhileRecording).toBe(true);
+  await page.keyboard.press('Control+Alt+J');
+  await expect(page.getByText('Shortcut set to Ctrl + Alt + J.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Reset' }).click();
+  await expect(page.getByText('Shortcut set to Ctrl + Shift + C.')).toBeVisible();
+
+  // Outside recording, losing focus still hides the popup, as before.
+  const hidden = await app.evaluate(async ({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win?.emit('blur');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const result = win?.isVisible() ?? true;
+    win?.show();
+    return result;
+  });
+  expect(hidden).toBe(false);
+});

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MorphApi } from '../shared/api';
 import { IPC } from '../shared/channels';
-import type { InspectResult, JobSnapshot, ShortcutStatus } from '../shared/types';
+import type { InspectResult, JobSnapshot, PdfPreviewResponse, ShortcutStatus } from '../shared/types';
 
 /**
  * The only bridge between the sandboxed renderer and the main process. It exposes a fixed set of
@@ -23,6 +23,8 @@ const api: MorphApi = {
   },
 
   startConversion: (request) => ipcRenderer.invoke(IPC.startConversion, request),
+  startPdfTool: (request) => ipcRenderer.invoke(IPC.startPdfTool, request) as Promise<{ jobId: string }>,
+  getPdfPreview: (fileId, start, count) => ipcRenderer.invoke(IPC.pdfPreview, { fileId, start, count }) as Promise<PdfPreviewResponse>,
   cancelJob: (jobId) => ipcRenderer.invoke(IPC.cancelJob, { jobId }),
   cancelAll: () => ipcRenderer.invoke(IPC.cancelAll),
   listJobs: () => ipcRenderer.invoke(IPC.listJobs) as Promise<JobSnapshot[]>,
@@ -37,6 +39,7 @@ const api: MorphApi = {
   setShortcut: (accelerator) => ipcRenderer.invoke(IPC.setShortcut, { accelerator }),
   getShortcutStatus: () => ipcRenderer.invoke(IPC.getShortcutStatus) as Promise<ShortcutStatus>,
   onShortcutStatusChanged: (listener) => subscribe<ShortcutStatus>(IPC.shortcutStatusChanged, listener),
+  setShortcutCapture: (active) => ipcRenderer.invoke(IPC.setShortcutCapture, { active }),
   pickOutputDirectory: () => ipcRenderer.invoke(IPC.pickOutputDirectory),
   pickToolPath: (tool) => ipcRenderer.invoke(IPC.pickToolPath, { tool }),
   clearToolPath: (tool) => ipcRenderer.invoke(IPC.clearToolPath, { tool }),
@@ -47,7 +50,8 @@ const api: MorphApi = {
 
   hideWindow: () => ipcRenderer.invoke(IPC.hideWindow),
   setContentHeight: (height) => ipcRenderer.invoke(IPC.setContentHeight, { height }),
-  onWindowShown: (listener) => subscribe<{ focused: boolean }>(IPC.windowShown, listener),
+  onWindowShown: (listener) => subscribe<{ focused: boolean; fresh: boolean; view?: 'home' | 'settings' }>(IPC.windowShown, listener),
+  onWindowHidden: (listener) => subscribe<undefined>(IPC.windowHidden, () => listener()),
   onNavigate: (listener) => subscribe<'home' | 'settings'>(IPC.navigate, listener),
 };
 

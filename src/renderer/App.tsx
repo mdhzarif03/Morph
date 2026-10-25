@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { Header } from './components/Header';
 import { Home } from './components/Home';
 import { SettingsView } from './components/SettingsView';
+import { PdfTools } from './components/pdf/PdfTools';
 import { Notice } from './components/ui';
 import { getApi } from './lib/api';
 import { commonTargets, initialState, isFinished, reducer } from './lib/state';
 import type { Settings } from '../shared/settings';
-import type { ShortcutStatus } from '../shared/types';
+import type { InspectedFile, ShortcutStatus } from '../shared/types';
 
 export function App() {
   const api = getApi();
@@ -15,10 +16,25 @@ export function App() {
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
   const [shortcut, setShortcut] = useState<ShortcutStatus | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  // Light and Dark are applied directly; System leaves the attribute off so the page follows Windows.
+  useEffect(() => {
+    const theme = settings?.theme;
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
+  }, [settings?.theme]);
   const shellRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
   const viewRef = useRef(state.view);
   viewRef.current = state.view;
+  const jobsRef = useRef(state.jobs);
+  jobsRef.current = state.jobs;
+  // Bumped whenever the popup starts over, so screens that keep their own state (PDF tools) start fresh too.
+  const [session, setSession] = useState(0);
+  const [pdfSeed, setPdfSeed] = useState<InspectedFile[]>([]);
+  const pdfDrop = useRef<((files: File[]) => void) | null>(null);
+  const registerPdfDrop = useCallback((handler: ((files: File[]) => void) | null) => {
+    pdfDrop.current = handler;
+  }, []);
 
   const targets = useMemo(() => commonTargets(state.files), [state.files]);
 
@@ -29,11 +45,28 @@ export function App() {
     void api.getSettings().then(setSettings);
     const offJobs = api.onJobUpdated((job) => dispatch({ type: 'job-updated', job }));
     const offNav = api.onNavigate((view) => dispatch({ type: 'navigate', view }));
+    // Closing the popup ends the visit: the next time it opens it shows the first page again.
+    // Work that is still running is never thrown away.
+    const startOver = () => {
+      if (Object.values(jobsRef.current).some((job) => !isFinished(job))) return;
+      void api.clearFinished();
+      dispatch({ type: 'start-over' });
+      setActionErrors({});
+      setPdfSeed([]);
+      setSession((n) => n + 1);
+    };
+    const offHidden = api.onWindowHidden(startOver);
+    const offShown = api.onWindowShown((info) => {
+      if (info.fresh) startOver();
+      if (info.view) dispatch({ type: 'navigate', view: info.view });
+    });
     const offShortcut = api.onShortcutStatusChanged(setShortcut);
     return () => {
       offJobs();
       offNav();
       offShortcut();
+      offHidden();
+      offShown();
     };
   }, [api]);
 
@@ -103,8 +136,9 @@ export function App() {
       dragDepth.current = 0;
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length === 0 || viewRef.current !== 'home') return;
-      void inspectWith(() => api.inspectDroppedFiles(files));
+      if (files.length === 0) return;
+      if (viewRef.current === 'home') void inspectWith(() => api.inspectDroppedFiles(files));
+      else if (viewRef.current === 'pdf') pdfDrop.current?.(files);
     };
     window.addEventListener('dragenter', onEnter);
     window.addEventListener('dragover', onOver);
@@ -122,7 +156,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      if (viewRef.current === 'settings') dispatch({ type: 'navigate', view: 'home' });
+      if (viewRef.current !== 'home') dispatch({ type: 'navigate', view: 'home' });
       else void api.hideWindow();
     };
     window.addEventListener('keydown', onKey);
@@ -171,6 +205,11 @@ export function App() {
         view={state.view}
         shortcut={shortcut?.registered ? shortcut.accelerator : null}
         onSettings={() => dispatch({ type: 'navigate', view: 'settings' })}
+        onPdfTools={() => {
+          setPdfSeed(state.files.filter((f) => f.format === 'pdf'));
+          setSession((n) => n + 1);
+          dispatch({ type: 'navigate', view: 'pdf' });
+        }}
         onBack={() => dispatch({ type: 'navigate', view: 'home' })}
         onClose={() => void api.hideWindow()}
       />
@@ -201,6 +240,17 @@ export function App() {
             onOpen={(id) => void runOutputAction(id, 'open')}
             onShow={(id) => void runOutputAction(id, 'show')}
             onReset={anyActive ? () => void api.cancelAll().then(reset) : reset}
+          />
+        ) : state.view === 'pdf' ? (
+          <PdfTools
+            key={session}
+            jobs={state.jobs}
+            seedFiles={pdfSeed}
+            actionErrors={actionErrors}
+            registerDrop={registerPdfDrop}
+            onCancel={(id) => void api.cancelJob(id)}
+            onOpen={(id) => void runOutputAction(id, 'open')}
+            onShow={(id) => void runOutputAction(id, 'show')}
           />
         ) : (
           <SettingsView settings={settings} onSettings={setSettings} shortcut={shortcut} onShortcut={setShortcut} />

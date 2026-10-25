@@ -12,7 +12,7 @@ describe('conversion registry', () => {
       const s = FORMATS[route.source].category;
       const t = FORMATS[route.target].category;
       const ok =
-        (s === 'image' && t === 'image') ||
+        (s === 'image' && (t === 'image' || t === 'document')) || // pictures can be placed on a PDF page
         (s === 'document' && (t === 'document' || t === 'image')) ||
         (s === 'audio' && t === 'audio') ||
         (s === 'video' && (t === 'video' || t === 'audio'));
@@ -21,7 +21,8 @@ describe('conversion registry', () => {
   });
 
   it('never advertises unsupported paths', () => {
-    expect(findRoute('png', 'pdf')).toBeUndefined();
+    expect(findRoute('png', 'docx')).toBeUndefined();
+    expect(findRoute('png', 'pdf')).toBeDefined(); // a picture can be placed on a PDF page
     expect(findRoute('pdf', 'docx')).toBeUndefined(); // PDF -> Word is deliberately not offered
     expect(findRoute('mp3', 'mp4')).toBeUndefined();
     expect(findRoute('wav', 'wav')).toBeUndefined();
@@ -38,7 +39,7 @@ describe('conversion registry', () => {
 
   it('covers every image format as both source and target', () => {
     const images = FORMAT_IDS.filter((f) => FORMATS[f].category === 'image');
-    for (const source of images) expect(targetsFor(source).sort()).toEqual([...images].sort());
+    for (const source of images) expect(targetsFor(source).sort()).toEqual([...images, 'pdf'].sort());
   });
 
   it('document and PDF conversions need no external program', () => {

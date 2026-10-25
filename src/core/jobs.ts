@@ -2,9 +2,10 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { MorphError, cancelledError, isAbortError, toErrorInfo } from '../shared/errors';
 import type { FormatId } from '../shared/formats';
-import type { JobSnapshot, JobStatus, ToolchainSnapshot } from '../shared/types';
+import type { JobSnapshot, JobStatus, StartPdfToolRequest, ToolchainSnapshot } from '../shared/types';
 import type { QualityDefaults } from './engines/image';
-import type { Executor } from './executor';
+import type { ExecRequest, Executor } from './executor';
+import type { PdfToolRequest } from './engines/pdf-tools';
 import { makeWorkDir, removeDir, statRegularFile } from './fsutil';
 import type { FileRegistry, RegisteredFile } from './inspect';
 import { noopLogger, type Logger } from './logger';
@@ -24,7 +25,13 @@ export interface JobManagerDeps {
 
 interface JobRecord {
   snapshot: JobSnapshot;
+  /** The first (or only) input. Outputs go next to it and are named after it. */
   file: RegisteredFile;
+  /** Every input that must still be unchanged when the job starts. */
+  inputs: RegisteredFile[];
+  /** Output base name (without extension). */
+  baseName: string;
+  pdfTool?: PdfToolRequest;
   controller: AbortController;
 }
 
@@ -64,6 +71,7 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
     const id = randomUUID();
     const snapshot: JobSnapshot = {
       id,
+      kind: 'convert',
       fileId,
       sourcePath: file.path,
       sourceName: file.path.split(/[\\/]/).pop() ?? file.path,
@@ -82,7 +90,66 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
       startedAt: null,
       finishedAt: null,
     };
-    this.jobs.set(id, { snapshot, file, controller: new AbortController() });
+    this.jobs.set(id, { snapshot, file, inputs: [file], baseName: file.baseName, controller: new AbortController() });
+    this.queue.push(id);
+    this.emitUpdate(snapshot, true);
+    this.pump();
+    return { ...snapshot };
+  }
+
+  /** Queues a PDF merge or split. Page selections are checked against the document by the engine. */
+  enqueuePdfTool(request: StartPdfToolRequest): JobSnapshot {
+    const lookup = (fileId: string): RegisteredFile => {
+      const file = this.deps.registry.get(fileId);
+      if (!file) throw new MorphError('INVALID_INPUT', 'That file is no longer available. Add it again.');
+      if (file.format !== 'pdf') throw new MorphError('INVALID_INPUT', `${file.path.split(/[\\/]/).pop() ?? 'This file'} is not a PDF.`);
+      return file;
+    };
+    const toInput = (file: RegisteredFile, pages: number[] | undefined) => ({ path: file.realPath, name: file.path.split(/[\\/]/).pop() ?? file.path, pages: pages ?? null });
+
+    let inputs: RegisteredFile[];
+    let pdfTool: PdfToolRequest;
+    let title: string;
+    let baseName: string;
+    if (request.kind === 'merge') {
+      if (request.items.length < 2) throw new MorphError('INVALID_OPTIONS', 'Add at least two PDFs to merge.');
+      inputs = request.items.map((item) => lookup(item.fileId));
+      pdfTool = { kind: 'merge', inputs: request.items.map((item, i) => toInput(inputs[i] as RegisteredFile, item.pages)) };
+      title = `Merge ${inputs.length} PDFs`;
+      baseName = `${(inputs[0] as RegisteredFile).baseName}_merged`;
+    } else {
+      const file = lookup(request.item.fileId);
+      inputs = [file];
+      pdfTool = { kind: 'split', input: toInput(file, request.item.pages), mode: request.mode, ...(request.ranges !== undefined ? { ranges: request.ranges } : {}), ...(request.every !== undefined ? { every: request.every } : {}) };
+      title = request.mode === 'extract' ? `Extract pages from ${toInput(file, undefined).name}` : `Split ${toInput(file, undefined).name}`;
+      baseName = file.baseName;
+    }
+    const first = inputs[0] as RegisteredFile;
+
+    const id = randomUUID();
+    const snapshot: JobSnapshot = {
+      id,
+      kind: request.kind,
+      title,
+      fileId: first.id,
+      sourcePath: first.path,
+      sourceName: first.path.split(/[\\/]/).pop() ?? first.path,
+      sourceFormat: 'pdf',
+      targetFormat: 'pdf',
+      options: {},
+      status: 'queued',
+      phase: 'Waiting',
+      progress: 0,
+      outputs: [],
+      primaryOutput: null,
+      warnings: [],
+      error: null,
+      cancelRequested: false,
+      createdAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+    };
+    this.jobs.set(id, { snapshot, file: first, inputs, baseName, pdfTool, controller: new AbortController() });
     this.queue.push(id);
     this.emitUpdate(snapshot, true);
     this.pump();
@@ -172,7 +239,7 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
   }
 
   private async run(record: JobRecord): Promise<void> {
-    const { snapshot, file, controller } = record;
+    const { snapshot, file, controller, inputs, baseName, pdfTool } = record;
     const signal = controller.signal;
     let workDir: string | null = null;
 
@@ -184,10 +251,12 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
       this.emitUpdate(snapshot, true);
       signal.throwIfAborted();
 
-      // The file must still be the one the user added.
-      const current = await statRegularFile(file.realPath);
-      if (current.size !== file.size || Math.abs(current.mtimeMs - file.mtimeMs) > 1) {
-        throw new MorphError('SOURCE_CHANGED', 'The file was modified after it was added. Add it again to convert the current version.');
+      // Every input must still be the file the user added.
+      for (const input of inputs) {
+        const current = await statRegularFile(input.realPath);
+        if (current.size !== input.size || Math.abs(current.mtimeMs - input.mtimeMs) > 1) {
+          throw new MorphError('SOURCE_CHANGED', 'A file was modified after it was added. Add it again to use the current version.');
+        }
       }
 
       workDir = await makeWorkDir();
@@ -201,9 +270,10 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
           targetFormat: snapshot.targetFormat,
           options: snapshot.options,
           workDir,
-          baseName: file.baseName,
+          baseName,
           toolchain: this.deps.getToolchain(),
-        },
+          ...(pdfTool ? { pdfTool } : {}),
+        } satisfies ExecRequest,
         (event) => {
           if (event.type === 'warning') {
             if (!snapshot.warnings.includes(event.message)) snapshot.warnings.push(event.message);
@@ -225,7 +295,7 @@ export class JobManager extends EventEmitter<JobManagerEvents> {
       snapshot.progress = 1;
       this.emitUpdate(snapshot, true);
 
-      const outputs = await finalizeOutputs({ result, sourcePath: file.path, baseName: file.baseName, workDir, settings: outputSettings, signal });
+      const outputs = await finalizeOutputs({ result, sourcePath: file.path, baseName, workDir, settings: outputSettings, signal });
       this.finish(record, 'succeeded', { outputs, primaryOutput: outputs[0]?.path ?? null });
       this.log.info('job succeeded', { jobId: snapshot.id, source: snapshot.sourceFormat, target: snapshot.targetFormat });
     } catch (error) {

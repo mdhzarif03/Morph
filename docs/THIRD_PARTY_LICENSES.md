@@ -15,6 +15,8 @@ The FFmpeg binaries that come with the npm packages are covered in `DEPENDENCIES
 | @img/sharp-linux-x64 | 0.35.5 | Apache-2.0 |
 | @img/sharp-linuxmusl-x64 | 0.35.5 | Apache-2.0 |
 | @nodable/entities | 3.1.0 | MIT |
+| @pdf-lib/standard-fonts | 1.0.0 | MIT |
+| @pdf-lib/upng | 1.0.1 | MIT |
 | @types/node | 10.17.60 | MIT |
 | agent-base | 6.0.2 | MIT |
 | anynum | 1.0.1 | MIT |
@@ -34,8 +36,10 @@ The FFmpeg binaries that come with the npm packages are covered in `DEPENDENCIES
 | inherits | 2.0.4 | ISC |
 | is-unsafe | 2.0.2 | MIT |
 | ms | 2.1.3 | MIT |
+| pako | 1.0.11 | (MIT AND Zlib) |
 | parse-cache-control | 1.0.1 | BSD |
 | path-expression-matcher | 1.6.2 | MIT |
+| pdf-lib | 1.17.1 | MIT |
 | pend | 1.2.0 | MIT |
 | progress | 2.0.3 | MIT |
 | readable-stream | 3.6.2 | MIT |
@@ -45,6 +49,7 @@ The FFmpeg binaries that come with the npm packages are covered in `DEPENDENCIES
 | sharp | 0.35.5 | Apache-2.0 |
 | string_decoder | 1.3.0 | MIT |
 | strnum | 2.5.1 | MIT |
+| tslib | 1.14.1 | 0BSD |
 | typedarray | 0.0.6 | MIT |
 | util-deprecate | 1.0.2 | MIT |
 | word-extractor | 1.0.4 | MIT |

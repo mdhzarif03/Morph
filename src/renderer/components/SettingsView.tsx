@@ -1,4 +1,4 @@
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, Monitor, Moon, Sun } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Settings } from '../../shared/settings';
 import type { AppInfo, ShortcutStatus } from '../../shared/types';
@@ -62,6 +62,29 @@ export function SettingsView({ settings, onSettings, shortcut, onShortcut }: Pro
     <div className="divide-y divide-line px-4 pb-4">
       <Section title="Shortcut" description="Opens the Morph popup from anywhere in Windows.">
         <ShortcutRecorder status={shortcut} onStatus={onShortcut} />
+      </Section>
+
+      <Section title="Appearance" description="Light, dark, or follow Windows.">
+        <div role="radiogroup" aria-label="Theme" className="no-drag grid grid-cols-3 gap-1 rounded-xl border border-line bg-surface p-1">
+          {(
+            [
+              ['system', 'System', Monitor],
+              ['light', 'Light', Sun],
+              ['dark', 'Dark', Moon],
+            ] as const
+          ).map(([value, label, Icon]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={settings.theme === value}
+              onClick={() => void update({ theme: value })}
+              className={`flex h-8 items-center justify-center gap-1.5 rounded-lg text-[13px] transition-colors ${settings.theme === value ? 'bg-raised font-medium text-ink' : 'text-muted hover:text-ink'}`}
+            >
+              <Icon size={14} aria-hidden /> {label}
+            </button>
+          ))}
+        </div>
       </Section>
 
       <Section title="Saving files" description="Converted files are saved next to the original unless you choose a folder.">

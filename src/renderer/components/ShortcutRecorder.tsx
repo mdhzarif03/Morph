@@ -12,6 +12,7 @@ export function ShortcutRecorder({ status, onStatus }: { status: ShortcutStatus 
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'bad' | 'info'; text: string } | null>(null);
   const [held, setHeld] = useState('');
+  const [typed, setTyped] = useState('');
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   const apply = async (accelerator: string) => {
@@ -31,6 +32,16 @@ export function ShortcutRecorder({ status, onStatus }: { status: ShortcutStatus 
 
   useEffect(() => {
     if (!recording) return;
+    // Pressing Ctrl+Shift or Alt+Shift can make Windows flash its language switcher and take focus for a
+    // moment. Tell the main process not to hide the popup while a shortcut is being recorded.
+    void api.setShortcutCapture(true).catch(() => undefined);
+    const stopOnOutsideClick = (e: MouseEvent) => {
+      if (buttonRef.current && e.target instanceof Node && !buttonRef.current.contains(e.target)) {
+        setRecording(false);
+        setHeld('');
+      }
+    };
+    window.addEventListener('mousedown', stopOnOutsideClick, true);
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -51,7 +62,11 @@ export function ShortcutRecorder({ status, onStatus }: { status: ShortcutStatus 
       void apply(accelerator);
     };
     window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('mousedown', stopOnOutsideClick, true);
+      void api.setShortcutCapture(false).catch(() => undefined);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recording]);
 
@@ -62,12 +77,9 @@ export function ShortcutRecorder({ status, onStatus }: { status: ShortcutStatus 
           ref={buttonRef}
           type="button"
           onClick={() => {
-            setRecording(true);
-            setMessage(null);
-          }}
-          onBlur={() => {
-            setRecording(false);
+            setRecording((value) => !value);
             setHeld('');
+            setMessage(null);
           }}
           aria-label={recording ? 'Recording shortcut. Press the new key combination, or Escape to cancel.' : `Global shortcut: ${status ? pretty(status.accelerator) : ''}. Activate to change.`}
           className={`flex h-9 min-w-52 items-center gap-2 rounded-lg border px-3 text-[13px] transition-colors ${recording ? 'border-accent bg-accent/10 text-accent' : 'border-line bg-raised text-ink hover:border-line-strong'}`}
@@ -84,6 +96,29 @@ export function ShortcutRecorder({ status, onStatus }: { status: ShortcutStatus 
       <div className="mt-2 space-y-2" aria-live="polite">
         {status && !status.registered && <Notice tone="warn">This shortcut is not active. {status.problem ?? ''}</Notice>}
         {message && <Notice tone={message.tone}>{message.text}</Notice>}
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (typed.trim() !== '') void apply(typed);
+          }}
+        >
+          <label htmlFor="shortcut-typed" className="text-xs text-muted">
+            Or type it
+          </label>
+          <input
+            id="shortcut-typed"
+            type="text"
+            value={typed}
+            placeholder="Ctrl+Alt+M"
+            maxLength={40}
+            onChange={(e) => setTyped(e.target.value)}
+            className="h-8 w-40 rounded-lg border border-line bg-raised px-2 text-[13px] text-ink placeholder:text-faint"
+          />
+          <Button type="submit" disabled={typed.trim() === ''}>
+            Set
+          </Button>
+        </form>
         <p className="text-xs text-muted">
           Use Ctrl, Alt or the Windows key with another key. Plain keys such as <kbd className="font-sans">Shift + C</kbd> are refused because they would stop you typing that letter in every other app.
         </p>

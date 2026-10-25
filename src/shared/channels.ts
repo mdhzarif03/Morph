@@ -19,12 +19,16 @@ export const IPC = {
   getShortcutStatus: 'morph:shortcut:status',
   getDiagnostics: 'morph:diagnostics:get',
   getAppInfo: 'morph:app:info',
+  startPdfTool: 'morph:pdf:start',
+  pdfPreview: 'morph:pdf:preview',
+  setShortcutCapture: 'morph:shortcut:capture',
   hideWindow: 'morph:window:hide',
   setContentHeight: 'morph:window:set-height',
   openLogs: 'morph:app:open-logs',
   // main -> renderer
   jobUpdated: 'morph:event:job-updated',
   windowShown: 'morph:event:window-shown',
+  windowHidden: 'morph:event:window-hidden',
   navigate: 'morph:event:navigate',
   shortcutStatusChanged: 'morph:event:shortcut-status',
 } as const;

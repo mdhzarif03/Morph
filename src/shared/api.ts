@@ -2,9 +2,11 @@ import type {
   AppInfo,
   InspectResult,
   JobSnapshot,
+  PdfPreviewResponse,
   ShortcutResult,
   ShortcutStatus,
   StartConversionRequest,
+  StartPdfToolRequest,
   StartConversionResponse,
   ToolId,
   ToolchainSnapshot,
@@ -22,6 +24,10 @@ export interface MorphApi {
 
   // Conversion
   startConversion(request: StartConversionRequest): Promise<StartConversionResponse>;
+  /** Merge PDFs or split / extract pages. Returns the id of the new job. */
+  startPdfTool(request: StartPdfToolRequest): Promise<{ jobId: string }>;
+  /** Small page images for a PDF the user added, 12 pages at most per call. */
+  getPdfPreview(fileId: string, start: number, count: number): Promise<PdfPreviewResponse>;
   cancelJob(jobId: string): Promise<void>;
   cancelAll(): Promise<void>;
   listJobs(): Promise<JobSnapshot[]>;
@@ -37,6 +43,8 @@ export interface MorphApi {
   updateSettings(patch: SettingsPatch): Promise<Settings>;
   setShortcut(accelerator: string): Promise<ShortcutResult>;
   getShortcutStatus(): Promise<ShortcutStatus>;
+  /** While recording a new shortcut the popup must not hide when Windows briefly takes focus (input-language switch). */
+  setShortcutCapture(active: boolean): Promise<void>;
   onShortcutStatusChanged(listener: (status: ShortcutStatus) => void): Unsubscribe;
   pickOutputDirectory(): Promise<Settings | null>;
   pickToolPath(tool: ToolId): Promise<ToolchainSnapshot | null>;
@@ -50,7 +58,12 @@ export interface MorphApi {
   // Window
   hideWindow(): Promise<void>;
   setContentHeight(height: number): Promise<void>;
-  /** Fired each time the popup is shown by the shortcut or tray. */
-  onWindowShown(listener: (info: { focused: boolean }) => void): Unsubscribe;
+  /**
+   * Fired each time the popup is shown by the shortcut or tray. `fresh` is true when it was hidden
+   * before; `view` is set when the tray asked for a particular page.
+   */
+  onWindowShown(listener: (info: { focused: boolean; fresh: boolean; view?: 'home' | 'settings' }) => void): Unsubscribe;
+  /** Fired when the popup is hidden, however that happened. */
+  onWindowHidden(listener: () => void): Unsubscribe;
   onNavigate(listener: (view: 'home' | 'settings') => void): Unsubscribe;
 }

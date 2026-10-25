@@ -25,6 +25,9 @@ export type InvokeChannel =
   | typeof IPC.getShortcutStatus
   | typeof IPC.getDiagnostics
   | typeof IPC.getAppInfo
+  | typeof IPC.startPdfTool
+  | typeof IPC.pdfPreview
+  | typeof IPC.setShortcutCapture
   | typeof IPC.hideWindow
   | typeof IPC.setContentHeight
   | typeof IPC.openLogs;
@@ -39,6 +42,9 @@ const toolId = z.enum(['ffmpeg', 'ffprobe']);
 // bound their shape so a hostile renderer cannot send arbitrarily large or nested data.
 const optionValue = z.union([z.string().max(256), z.number().finite(), z.boolean(), z.null()]);
 
+const pageNumber = z.number().int().min(1).max(100_000);
+const pdfItem = z.strictObject({ fileId: id, pages: z.array(pageNumber).min(1).max(10_000).optional() });
+
 export const schemas = {
   empty: z.undefined().or(z.null()),
   inspectPaths: z.strictObject({ paths: z.array(absolutePath).min(1).max(MAX_FILES_PER_REQUEST) }),
@@ -47,6 +53,18 @@ export const schemas = {
     target: z.enum(FORMAT_IDS),
     options: z.record(z.string().max(64), optionValue).refine((o) => Object.keys(o).length <= 32, 'Too many options'),
   }),
+  startPdfTool: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('merge'), items: z.array(pdfItem).min(2).max(100) }),
+    z.strictObject({
+      kind: z.literal('split'),
+      item: pdfItem,
+      mode: z.enum(['extract', 'each', 'ranges', 'every']),
+      ranges: z.string().max(400).regex(/^[0-9,\-\s]*$/).optional(),
+      every: z.number().int().min(1).max(10_000).optional(),
+    }),
+  ]),
+  pdfPreview: z.strictObject({ fileId: id, start: z.number().int().min(0).max(100_000), count: z.number().int().min(1).max(12) }),
+  setShortcutCapture: z.strictObject({ active: z.boolean() }),
   jobId: z.strictObject({ jobId: id }),
   openOutput: z.strictObject({ jobId: id }),
   updateSettings: SettingsPatchSchema,

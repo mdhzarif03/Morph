@@ -8,6 +8,7 @@ import type { AppInfo, InspectResult, ShortcutResult, StartConversionResponse, T
 import type { Settings } from '../shared/settings';
 import type { Logger } from '../core/logger';
 import type { FileRegistry } from '../core/inspect';
+import type { PdfPreviewService } from '../core/pdf-preview';
 import { inspectFiles } from '../core/inspect';
 import type { JobManager } from '../core/jobs';
 import { isTrustedSender, parsePayload } from './ipc-guard';
@@ -22,6 +23,7 @@ export interface IpcContext {
   shortcuts: ShortcutManager;
   jobs: JobManager;
   registry: FileRegistry;
+  pdfPreview: PdfPreviewService;
   windows: WindowManager;
   log: Logger;
   logsPath: string;
@@ -89,6 +91,8 @@ export function registerIpc(ctx: IpcContext): void {
     }
     return response;
   });
+  handle(IPC.startPdfTool, schemas.startPdfTool, (request) => ({ jobId: ctx.jobs.enqueuePdfTool(request).id }));
+  handle(IPC.pdfPreview, schemas.pdfPreview, ({ fileId, start, count }) => ctx.pdfPreview.pages(fileId, start, count));
   handle(IPC.cancelJob, schemas.jobId, ({ jobId }) => ctx.jobs.cancel(jobId));
   handle(IPC.cancelAll, schemas.empty, () => ctx.jobs.cancelAll());
   handle(IPC.listJobs, schemas.empty, () => ctx.jobs.list());
@@ -130,6 +134,7 @@ export function registerIpc(ctx: IpcContext): void {
     return result;
   });
   handle(IPC.getShortcutStatus, schemas.empty, () => ctx.shortcuts.status());
+  handle(IPC.setShortcutCapture, schemas.setShortcutCapture, ({ active }) => ctx.windows.setShortcutCapture(active));
 
   handle(IPC.pickOutputDirectory, schemas.empty, async (): Promise<Settings | null> => {
     const parent = ctx.windows.browserWindow;

@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll } from 'vitest';
-import type { InspectedFile, JobSnapshot, ToolchainSnapshot } from '../../src/shared/types';
+import type { InspectedFile, JobSnapshot, StartPdfToolRequest, ToolchainSnapshot } from '../../src/shared/types';
 import type { FormatId } from '../../src/shared/formats';
 import { executeInProcess } from '../../src/core/executor';
 import { FileRegistry, inspectFile } from '../../src/core/inspect';
@@ -56,6 +56,8 @@ export interface Harness {
   toolchain: ToolchainSnapshot;
   inspect(filePath: string): Promise<InspectedFile>;
   convert(filePath: string, target: FormatId, options?: Record<string, unknown>): Promise<JobSnapshot>;
+  /** Runs a PDF merge or split on already inspected files and waits for it to finish. */
+  pdfTool(request: StartPdfToolRequest): Promise<JobSnapshot>;
 }
 
 export async function createHarness(overrides: { output?: Partial<OutputSettings>; toolchain?: ToolchainSnapshot; executor?: typeof executeInProcess; concurrency?: number } = {}): Promise<Harness> {
@@ -78,6 +80,13 @@ export async function createHarness(overrides: { output?: Partial<OutputSettings
     async convert(filePath, target, options = {}) {
       const file = await inspectFile(filePath, registry, { toolchain, quality });
       const job = manager.enqueue(file.id, target, options);
+      await manager.idle();
+      const finished = manager.get(job.id);
+      if (!finished) throw new Error('job vanished');
+      return finished;
+    },
+    async pdfTool(request) {
+      const job = manager.enqueuePdfTool(request);
       await manager.idle();
       const finished = manager.get(job.id);
       if (!finished) throw new Error('job vanished');

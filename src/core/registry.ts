@@ -2,6 +2,7 @@ import { MorphError } from '../shared/errors';
 import { FORMATS, type FormatId } from '../shared/formats';
 import { normalizeOptions, type OptionSpec, type OptionValues } from '../shared/options';
 import type { TargetDescriptor, ToolId, ToolchainSnapshot } from '../shared/types';
+import { convertImageToPdf, imagePdfNotes, imagePdfOptionSpecs } from './engines/image-pdf';
 import { convertImage, IMAGE_FORMATS, imageNotes, imageOptionSpecs, type QualityDefaults } from './engines/image';
 import { AUDIO_FORMATS, VIDEO_FORMATS, audioOptionSpecs, convertMedia, mediaNotes, mediaUnavailableReason, videoOptionSpecs } from './engines/media';
 import { convertDocument, documentPageOptionSpecs } from './engines/office';
@@ -69,11 +70,24 @@ function buildRoutes(): Route[] {
         target,
         requires: [],
         description: TARGET_DESCRIPTIONS[target] ?? '',
-        options: (env) => imageOptionSpecs(target, env.quality),
+        options: (env) => imageOptionSpecs(target, env.quality, source),
         notes: () => imageNotes(source, target),
         run: convertImage,
       });
     }
+  }
+
+  // Pictures -> a one-page PDF
+  for (const source of IMAGE_FORMATS) {
+    routes.push({
+      source,
+      target: 'pdf',
+      requires: [],
+      description: 'A PDF with the picture on one page',
+      options: () => imagePdfOptionSpecs,
+      notes: () => imagePdfNotes(),
+      run: convertImageToPdf,
+    });
   }
 
   // PDF pages -> images

@@ -49,11 +49,17 @@ export function JobRow({ job, onCancel, onOpen, onShow, actionError }: Props) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium text-ink" title={job.sourcePath}>
-            {middleEllipsis(job.sourceName, 40)} <span className="font-normal text-muted">→ {target}</span>
+            {job.title ? (
+              middleEllipsis(job.title, 48)
+            ) : (
+              <>
+                {middleEllipsis(job.sourceName, 40)} <span className="font-normal text-muted">→ {target}</span>
+              </>
+            )}
           </p>
           {active && (
             <div className="mt-2">
-              <ProgressBar progress={job.status === 'finalizing' ? 1 : job.progress} label={`Converting ${job.sourceName}`} />
+              <ProgressBar progress={job.status === 'finalizing' ? 1 : job.progress} label={`${job.title ?? `Converting ${job.sourceName}`}`} />
               <p className="mt-1.5 text-xs text-muted" aria-live="polite">
                 {job.phase ?? 'Working'}
                 {job.progress !== null && job.status === 'running' ? ` · ${Math.round(job.progress * 100)}%` : ''}

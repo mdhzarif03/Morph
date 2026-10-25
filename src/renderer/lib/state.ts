@@ -2,7 +2,7 @@ import { defaultOptions, isOptionActive, type OptionSpec, type OptionValue, type
 import type { FormatId } from '../../shared/formats';
 import type { InspectedFile, JobSnapshot, RejectedFile, TargetDescriptor } from '../../shared/types';
 
-export type View = 'home' | 'settings';
+export type View = 'home' | 'settings' | 'pdf';
 
 export interface AppState {
   view: View;
@@ -40,7 +40,8 @@ export type Action =
   | { type: 'jobs-started'; jobIds: string[]; startError: string | null }
   | { type: 'job-updated'; job: JobSnapshot }
   | { type: 'jobs-loaded'; jobs: JobSnapshot[] }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'start-over' };
 
 /** Targets that every selected file can be converted to (batch conversions need a common format). */
 export function commonTargets(files: readonly InspectedFile[]): TargetDescriptor[] {
@@ -101,6 +102,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, jobs: { ...state.jobs, ...Object.fromEntries(action.jobs.map((j) => [j.id, j])) } };
     case 'reset':
       return { ...initialState, view: state.view, jobs: state.jobs };
+    case 'start-over':
+      // The popup was closed and reopened: back to the first page with nothing left over.
+      return { ...initialState, jobs: Object.fromEntries(Object.entries(state.jobs).filter(([, job]) => !isFinished(job))) };
   }
 }
 

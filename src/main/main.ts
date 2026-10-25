@@ -1,7 +1,8 @@
-import { app, globalShortcut, Menu, nativeImage, Notification, Tray } from 'electron';
+import { app, globalShortcut, Menu, nativeImage, nativeTheme, Notification, Tray } from 'electron';
 import path from 'node:path';
 import { createWorkerExecutor } from '../core/worker/pool';
 import { FileRegistry } from '../core/inspect';
+import { PdfPreviewService } from '../core/pdf-preview';
 import { JobManager } from '../core/jobs';
 import { createFileLogger } from './file-logger';
 import { registerIpc } from './ipc';
@@ -36,8 +37,13 @@ async function start(): Promise<void> {
   const resourcesDir = app.isPackaged ? process.resourcesPath : path.join(appRoot, 'resources');
   const iconFile = path.join(app.isPackaged ? process.resourcesPath : path.join(appRoot, 'build'), app.isPackaged ? 'icon.png' : 'icon.png');
 
+  // The popup has no menu bar; without this Electron's default menu would claim keys such as Ctrl+R and Ctrl+W.
+  Menu.setApplicationMenu(null);
+
   const settings = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'), log);
   await settings.load();
+  // Setting the theme source makes the page's prefers-color-scheme follow the user's choice (or Windows when "system").
+  nativeTheme.themeSource = settings.get().theme;
 
   const toolchain = new ToolchainService({
     bundledRoots: bundledVendorRoots(process.resourcesPath, appRoot, app.isPackaged),
@@ -47,6 +53,7 @@ async function start(): Promise<void> {
   log.info('toolchain', Object.fromEntries(Object.entries(toolchain.current().tools).map(([id, t]) => [id, t.found ? (t.source ?? 'found') : 'missing'])));
 
   const registry = new FileRegistry();
+  const pdfPreview = new PdfPreviewService(registry);
   // worker.cjs stays inside app.asar (Electron loads worker threads from it); only native/binary packages are unpacked.
   const workerFile = path.join(__dirname, 'worker.cjs');
   const jobs = new JobManager({
@@ -81,7 +88,7 @@ async function start(): Promise<void> {
   };
   applyLaunchAtLogin(settings.get().launchAtLogin);
 
-  registerIpc({ settings, toolchain, shortcuts, jobs, registry, windows, log, logsPath, applyLaunchAtLogin });
+  registerIpc({ settings, toolchain, shortcuts, jobs, registry, pdfPreview, windows, log, logsPath, applyLaunchAtLogin });
 
   // ---- Job events -> renderer, and a notification once a batch is finished ----------------
   let finishedInBatch = 0;
@@ -118,7 +125,11 @@ async function start(): Promise<void> {
     );
   };
   refreshTray();
-  settings.on('changed', refreshTray);
+  settings.on('changed', (next) => {
+    refreshTray();
+    if (nativeTheme.themeSource !== next.theme) nativeTheme.themeSource = next.theme;
+  });
+  nativeTheme.on('updated', () => windows.refreshBackground());
   tray.on('click', () => windows.show({ forceFocus: true }));
 
   app.on('second-instance', () => windows.show({ forceFocus: true }));
@@ -129,7 +140,10 @@ async function start(): Promise<void> {
     windows.markQuitting();
     jobs.cancelAll();
   });
-  app.on('will-quit', () => shortcuts.dispose());
+  app.on('will-quit', () => {
+    shortcuts.dispose();
+    pdfPreview.dispose();
+  });
 
   windows.warmUp();
 

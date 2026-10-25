@@ -52,7 +52,31 @@ const backgroundSpec: OptionSpec = {
   help: 'Transparent areas are filled with this colour because this format cannot store transparency.',
 };
 
-export function imageOptionSpecs(target: FormatId, defaults: QualityDefaults): OptionSpec[] {
+const framesSpec: OptionSpec = {
+  key: 'frames',
+  type: 'select',
+  label: 'Animated images',
+  default: 'first',
+  choices: [
+    { value: 'first', label: 'First frame only', description: 'One still image' },
+    { value: 'all', label: 'Every frame', description: 'All frames as numbered images in a ZIP' },
+  ],
+  help: 'Applies to animated WebP and GIF files and to TIFF files with several pages.',
+};
+
+/** Whether files of this format can hold several frames or pages. */
+export function hasFrames(source: FormatId): boolean {
+  return source === 'webp' || source === 'gif' || source === 'tiff';
+}
+
+export function imageOptionSpecs(target: FormatId, defaults: QualityDefaults, source?: FormatId): OptionSpec[] {
+  const specs = imageOptionSpecsFor(target, defaults);
+  // Still-image targets can export every frame of an animation as separate images.
+  if ((target === 'png' || target === 'jpg') && source !== undefined && hasFrames(source)) return [framesSpec, ...specs];
+  return specs;
+}
+
+function imageOptionSpecsFor(target: FormatId, defaults: QualityDefaults): OptionSpec[] {
   switch (target) {
     case 'png':
       return [...resizeSpecs, metadataSpec];
@@ -116,7 +140,7 @@ export function imageNotes(source: FormatId, target: FormatId): string[] {
   if (!t.supportsTransparency && s.supportsTransparency) {
     notes.push(`${t.label} cannot store transparency. Transparent areas are filled with the background colour you choose.`);
   }
-  if (s.supportsAnimation && !t.supportsAnimation) notes.push(`${t.label} cannot hold animation. Animated images are converted to a single still frame.`);
+  if (s.supportsAnimation && !t.supportsAnimation) notes.push(`${t.label} cannot hold animation. Animated images are converted to a single still frame, or to one image per frame if you choose that below.`);
   notes.push('Size limits only scale images down and keep their proportions.');
   if (source === target) notes.push('Same format: the image is re-encoded, which is useful for resizing or compressing.');
   if (target === 'gif') notes.push('GIF supports only fully transparent or fully opaque pixels, so soft edges become hard.');
@@ -127,7 +151,7 @@ export function imageNotes(source: FormatId, target: FormatId): string[] {
 // ---------------------------------------------------------------------------------------------
 // Loading
 
-interface SourceMeta {
+export interface SourceMeta {
   width: number;
   height: number;
   pages: number;
@@ -136,12 +160,12 @@ interface SourceMeta {
   space: string | undefined;
 }
 
-interface LoadedSource {
+export interface LoadedSource {
   meta: SourceMeta;
   create(animated: boolean): Sharp;
 }
 
-function translateSharpError(error: unknown): MorphError {
+export function translateSharpError(error: unknown): MorphError {
   if (error instanceof MorphError) return error;
   if (isAbortError(error)) return error as MorphError;
   const message = error instanceof Error ? error.message : String(error);
@@ -173,6 +197,10 @@ function rawSource(image: RawImage): LoadedSource {
     meta: { width: image.width, height: image.height, pages: 1, hasAlpha: true, orientation: 1, space: 'srgb' },
     create: () => sharp(image.rgba, { raw: { width: image.width, height: image.height, channels: 4 }, limitInputPixels: false }),
   };
+}
+
+export async function loadImageSource(filePath: string, format: FormatId): Promise<LoadedSource> {
+  return loadSource(filePath, format);
 }
 
 async function loadSource(filePath: string, format: FormatId): Promise<LoadedSource> {
@@ -302,6 +330,10 @@ export async function convertImage(ctx: EngineContext): Promise<EngineResult> {
   const { meta } = source;
   ctx.signal.throwIfAborted();
 
+  if ((target === 'png' || target === 'jpg') && meta.pages > 1 && options.frames === 'all') {
+    return convertFrames(ctx, source, outputExtension(target));
+  }
+
   // Animation: keep it only when both ends support it and the frames fit in the memory budget.
   let animated = false;
   if (meta.pages > 1) {
@@ -360,6 +392,39 @@ export async function convertImage(ctx: EngineContext): Promise<EngineResult> {
   ctx.signal.throwIfAborted();
   ctx.report({ progress: 1 });
   return { files: [{ path: outputPath, name: outputName }], packaging: 'single' };
+}
+
+const MAX_FRAMES = 2000;
+
+/** Every frame of an animation (or page of a TIFF) as its own image, packaged as a ZIP. */
+async function convertFrames(ctx: EngineContext, source: LoadedSource, ext: string): Promise<EngineResult> {
+  const { meta } = source;
+  const target = ctx.targetFormat;
+  const frames = Math.min(meta.pages, MAX_FRAMES);
+  if (meta.pages > MAX_FRAMES) ctx.warn(`The file has ${meta.pages.toLocaleString('en-US')} frames. Only the first ${MAX_FRAMES.toLocaleString('en-US')} were exported.`);
+  const dir = path.join(ctx.workDir, 'frames');
+  await fs.mkdir(dir, { recursive: true });
+  const maxWidth = optNumberOrNull(ctx.options, 'maxWidth');
+  const maxHeight = optNumberOrNull(ctx.options, 'maxHeight');
+  const scale = Math.min(maxWidth ? maxWidth / meta.width : 1, maxHeight ? maxHeight / meta.height : 1, 1);
+  const files: EngineResult['files'] = [];
+  const width = Math.max(3, String(frames).length);
+  try {
+    for (let index = 0; index < frames; index += 1) {
+      ctx.signal.throwIfAborted();
+      ctx.report({ phase: `Exporting frame ${index + 1} of ${frames}`, progress: index / frames });
+      let pipeline = sharp(ctx.sourcePath, { ...sharpInputOptions, page: index, pages: 1 });
+      if (scale < 1) pipeline = pipeline.resize({ width: Math.max(1, Math.round(meta.width * scale)), fit: 'inside', withoutEnlargement: true });
+      if (meta.hasAlpha && !FORMATS[target].supportsTransparency) pipeline = pipeline.flatten({ background: hexToRgb(optString(ctx.options, 'background')) });
+      const out = path.join(dir, `f${index}.${ext}`);
+      await encode(pipeline, target, ctx.options).toFile(out);
+      files.push({ path: out, name: `${ctx.baseName}_frame_${String(index + 1).padStart(width, '0')}.${ext}` });
+    }
+  } catch (error) {
+    throw translateSharpError(error);
+  }
+  ctx.report({ progress: 1 });
+  return { files, packaging: 'zip' };
 }
 
 function optionalBoolean(options: EngineContext['options'], key: string): boolean {

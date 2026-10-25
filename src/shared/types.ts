@@ -100,8 +100,14 @@ export interface JobOutput {
   size: number;
 }
 
+export type JobKind = 'convert' | 'merge' | 'split';
+
 export interface JobSnapshot {
   id: string;
+  /** 'convert' for ordinary conversions; PDF merge and split jobs have their own kinds. */
+  kind: JobKind;
+  /** Replaces the "name → format" heading for jobs that are not a plain conversion, e.g. "Merge 3 PDFs". */
+  title?: string;
   fileId: string;
   sourcePath: string;
   sourceName: string;
@@ -128,6 +134,31 @@ export interface StartConversionRequest {
   fileIds: string[];
   target: FormatId;
   options: Record<string, unknown>;
+}
+
+/** One PDF in a merge or split. `pages` are 1-based; omit for every page. */
+export interface PdfToolItem {
+  fileId: string;
+  pages?: number[];
+}
+
+export type StartPdfToolRequest =
+  | { kind: 'merge'; items: PdfToolItem[] }
+  | { kind: 'split'; item: PdfToolItem; mode: 'extract' | 'each' | 'ranges' | 'every'; ranges?: string; every?: number };
+
+export interface PdfPreviewPage {
+  /** 1-based page number. */
+  page: number;
+  /** data: URL of a small JPEG. */
+  src: string;
+  /** Page size in PDF points, to lay out placeholders with the right proportions. */
+  widthPt: number;
+  heightPt: number;
+}
+
+export interface PdfPreviewResponse {
+  pageCount: number;
+  pages: PdfPreviewPage[];
 }
 
 export interface StartConversionResponse {

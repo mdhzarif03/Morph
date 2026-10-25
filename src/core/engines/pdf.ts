@@ -217,3 +217,61 @@ export async function renderPdfToImages(ctx: EngineContext, pdfPath: string, nam
     doc.destroy();
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Page thumbnails for the merge / split preview
+
+export interface PdfThumbnail {
+  page: number;
+  src: string;
+  widthPt: number;
+  heightPt: number;
+}
+
+/** An open document that renders small page previews on demand. Close it when done. */
+export interface PdfPreviewSession {
+  pageCount: number;
+  thumbnails(start: number, count: number, targetWidthPx: number, signal?: AbortSignal): Promise<PdfThumbnail[]>;
+  close(): void;
+}
+
+export async function openPdfPreview(pdfPath: string): Promise<PdfPreviewSession> {
+  const { doc, info } = await openPdf(pdfPath);
+  let closed = false;
+  return {
+    pageCount: info.pages,
+    async thumbnails(start, count, targetWidthPx, signal) {
+      if (closed) throw new MorphError('INTERNAL', 'The preview was closed.');
+      const out: PdfThumbnail[] = [];
+      const last = Math.min(info.pages, start + count);
+      for (let index = Math.max(0, start); index < last; index += 1) {
+        signal?.throwIfAborted();
+        const page = doc.getPage(index);
+        try {
+          const { originalWidth, originalHeight } = page.getOriginalSize();
+          const scale = Math.min(targetWidthPx / originalWidth, (targetWidthPx * 1.8) / originalHeight, 4);
+          const bitmap = await page.render({ scale: Math.max(0.05, scale), render: 'bitmap', renderFormFields: true });
+          const jpeg = await sharp(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), { raw: { width: bitmap.width, height: bitmap.height, channels: 4 } })
+            .flatten({ background: '#ffffff' })
+            .jpeg({ quality: 68 })
+            .toBuffer();
+          out.push({ page: index + 1, src: `data:image/jpeg;base64,${jpeg.toString('base64')}`, widthPt: originalWidth, heightPt: originalHeight });
+        } catch (error) {
+          // One unreadable page must not hide the rest: send a blank placeholder with the page's proportions.
+          if (signal?.aborted) throw error;
+          out.push({ page: index + 1, src: '', widthPt: 595, heightPt: 842 });
+        } finally {
+          page.close();
+        }
+        // Let the main process breathe between pages so the popup stays responsive.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      return out;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      doc.destroy();
+    },
+  };
+}

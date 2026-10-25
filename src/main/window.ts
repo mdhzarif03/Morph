@@ -1,4 +1,4 @@
-import { BrowserWindow, screen, shell, session, type Rectangle } from 'electron';
+import { BrowserWindow, nativeTheme, screen, shell, session, type Rectangle } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { IPC } from '../shared/ipc';
@@ -29,6 +29,9 @@ export class WindowManager {
   private ready = false;
   private pendingView: 'home' | 'settings' | null = null;
   private blurSuppressions = 0;
+  /** True while the shortcut recorder is listening; Windows may take focus for a moment when the keys switch the input language. */
+  private capturing = false;
+  private captureTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: WindowManagerOptions) {}
 
@@ -49,6 +52,27 @@ export class WindowManager {
         this.blurSuppressions -= 1;
       }, 300);
     }
+  }
+
+  /** Keeps the popup open while the user records a new shortcut. Ends by itself after a minute. */
+  setShortcutCapture(active: boolean): void {
+    clearTimeout(this.captureTimer);
+    this.capturing = active;
+    if (active) {
+      this.captureTimer = setTimeout(() => {
+        this.capturing = false;
+      }, 60_000);
+      this.captureTimer.unref?.();
+    }
+  }
+
+  /** The popup background follows the theme, so there is no dark flash before the page paints in light mode. */
+  private background(): string {
+    return nativeTheme.shouldUseDarkColors ? '#141518' : '#f6f7fa';
+  }
+
+  refreshBackground(): void {
+    this.browserWindow?.setBackgroundColor(this.background());
   }
 
   markQuitting(): void {
@@ -81,7 +105,7 @@ export class WindowManager {
       skipTaskbar: true,
       alwaysOnTop: true,
       title: 'Morph',
-      backgroundColor: '#141518',
+      backgroundColor: this.background(),
       ...(this.options.iconPath ? { icon: this.options.iconPath } : {}),
       webPreferences: {
         preload: path.join(this.options.distMain, 'preload.cjs'),
@@ -112,7 +136,13 @@ export class WindowManager {
       }
     });
     window.on('blur', () => {
+      if (this.capturing) return;
       if (this.blurSuppressions === 0 && this.options.getHideOnBlur() && !window.webContents.isDevToolsOpened()) window.hide();
+    });
+    // However the popup was hidden (Esc, close button, clicking away, the shortcut), the page returns to its start.
+    window.on('hide', () => {
+      this.capturing = false;
+      this.send(IPC.windowHidden, undefined);
     });
     window.webContents.on('render-process-gone', (_e, details) => log.error('renderer gone', { reason: details.reason }));
     window.webContents.on('did-finish-load', () => {
@@ -161,12 +191,10 @@ export class WindowManager {
   show(options: { view?: 'home' | 'settings'; forceFocus?: boolean } = {}): void {
     this.window ??= this.create();
     const window = this.window;
+    const fresh = !window.isVisible();
     this.place(window);
 
-    if (options.view) {
-      if (this.ready) window.webContents.send(IPC.navigate, options.view);
-      else this.pendingView = options.view;
-    }
+    if (options.view && !this.ready) this.pendingView = options.view;
 
     const takeFocus = options.forceFocus === true || this.options.getFocusOnOpen() || options.view === 'settings';
     if (takeFocus) {
@@ -177,7 +205,7 @@ export class WindowManager {
       window.showInactive();
     }
     window.setAlwaysOnTop(true, 'pop-up-menu');
-    if (this.ready) window.webContents.send(IPC.windowShown, { focused: takeFocus });
+    if (this.ready) window.webContents.send(IPC.windowShown, { focused: takeFocus, fresh, ...(options.view ? { view: options.view } : {}) });
   }
 
   hide(): void {
@@ -200,7 +228,7 @@ export class WindowManager {
     }
     window.show();
     window.focus();
-    window.webContents.send(IPC.windowShown, { focused: true });
+    window.webContents.send(IPC.windowShown, { focused: true, fresh: false });
   }
 
   send(channel: string, payload: unknown): void {
